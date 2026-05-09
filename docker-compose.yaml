@@ -1,0 +1,70 @@
+# ══════════════════════════════════════════════════════════════════
+# CFO Sentinel — Docker Compose
+# Jalankan dengan: docker-compose up --build
+# ══════════════════════════════════════════════════════════════════
+
+version: "3.9"
+
+services:
+
+  cfo-sentinel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: cfo-sentinel
+
+    # ── Port mapping ──────────────────────────────────────────────
+    # HOST:CONTAINER
+    # Akses via: http://localhost:8501 (lokal)
+    # atau http://IP_VPS:8501 (dari internet)
+    ports:
+      - "8501:8501"
+
+    # ── Environment variables ─────────────────────────────────────
+    # Baca dari file .env di root project
+    # JANGAN hardcode API key di sini
+    env_file:
+      - .env
+
+    # ── Volumes ───────────────────────────────────────────────────
+    # Persist SQLite database di luar container
+    # Jika container di-restart, data tidak hilang
+    volumes:
+      - cfo_data:/app/data
+
+    # ── Restart policy ────────────────────────────────────────────
+    # unless-stopped: restart otomatis kecuali di-stop manual
+    # Berguna di VPS agar sistem tetap jalan setelah reboot
+    restart: unless-stopped
+
+    # ── Resource limits ───────────────────────────────────────────
+    # Sesuai VPS Sumopod plan Rp 90.000 (4 GB RAM, 2 vCPU)
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: "2G"
+        reservations:
+          cpus: "0.5"
+          memory: "512M"
+
+    # ── Logging ───────────────────────────────────────────────────
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # ── Health check ──────────────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# ── Named volumes ─────────────────────────────────────────────────
+volumes:
+  cfo_data:
+    driver: local

@@ -1,0 +1,48 @@
+# ── Jangan masukkan ke image ──────────────────────────────────────
+
+# Environment & secrets
+.env
+.env.*
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.pyc
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Database lokal — akan dibuat fresh di container
+data/*.db
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+tests/
+test_pipeline.py
+pytest_cache/
+.pytest_cache/
+
+# Docs (tidak dibutuhkan di runtime)
+*.md
+docs/
+
+# Logs
+*.log
