@@ -24,6 +24,7 @@ load_dotenv()
 from core.database import init_database, get_agent_logs, get_transactions
 from core.schemas import PipelineState
 from dashboard.pdf_export import generate_pdf_report
+from dashboard.auth import render_auth_page, render_user_greeting
 
 # ── Page config ────────────────────────────────────────────────────
 st.set_page_config(
@@ -74,6 +75,9 @@ def render_sidebar() -> dict:
         st.title("CFO Sentinel")
         st.caption("AI-Powered Financial Advisor untuk UMKM")
         st.divider()
+
+        # User greeting & logout
+        render_user_greeting()
 
         demo_mode = st.toggle(
             "🎬 Demo Mode",
@@ -309,6 +313,7 @@ def _run_live_pipeline(raw_input: str, config: dict):
                 raw_input=raw_input,
                 business_type=config["business_type"],
                 current_cash_balance=float(config["cash_balance"]),
+                user_id=st.session_state.get("user_id"),
             )
             progress.progress(100, "Selesai!")
             st.session_state.pipeline_result = result
@@ -1147,10 +1152,19 @@ def main():
     _init_session()
     init_database()
 
+    # Auth gate
+    if not render_auth_page():
+        return
+
     config = render_sidebar()
 
-    st.title("🛡️ CFO Sentinel")
-    st.markdown("*AI-Powered Financial Survival & Strategic Decision System untuk UMKM*")
+    # Personalized title
+    user_name = st.session_state.get("user_name", "")
+    st.title(f"🛡️ CFO Sentinel")
+    if user_name:
+        st.markdown(f"*Selamat datang, **{user_name}**! Ini dashboard keuangan bisnis kamu.*")
+    else:
+        st.markdown("*AI-Powered Financial Survival & Strategic Decision System untuk UMKM*")
     st.divider()
 
     render_input_section(config)

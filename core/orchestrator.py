@@ -129,7 +129,8 @@ def node_categorizer(state: dict) -> dict:
             t.model_dump() if hasattr(t, "model_dump") else dict(t)
             for t in output.transactions
         ]
-        save_transactions(tx_dicts, session_id)
+        user_id = _get(state, "user_id")
+        save_transactions(tx_dicts, session_id, user_id=user_id)
 
         log_agent_step(
             session_id=session_id,
@@ -277,8 +278,9 @@ def node_anomaly(state: dict) -> dict:
             a.model_dump() if hasattr(a, "model_dump") else dict(a)
             for a in output.anomalies
         ]
+        user_id = _get(state, "user_id")
         if anomaly_dicts:
-            save_anomalies(anomaly_dicts, session_id)
+            save_anomalies(anomaly_dicts, session_id, user_id=user_id)
 
         log_agent_step(
             session_id=session_id,
@@ -424,8 +426,9 @@ def node_advisor(state: dict) -> dict:
             }
             for item in output.action_items
         ]
+        user_id = _get(state, "user_id")
         if rec_dicts:
-            save_recommendations(rec_dicts, session_id)
+            save_recommendations(rec_dicts, session_id, user_id=user_id)
 
         log_agent_step(
             session_id=session_id,
@@ -464,6 +467,7 @@ def node_finalize(state: dict) -> dict:
     print("💾 [Finalize] Saving session data...")
     session_id     = _get(state, "session_id")
     business_type  = _get(state, "business_type", "general")
+    user_id        = _get(state, "user_id")
     analyst_output = _get(state, "analyst_output")
     errors         = list(_get(state, "errors", []))
 
@@ -491,7 +495,7 @@ def node_finalize(state: dict) -> dict:
                     fp.model_dump() for fp in analyst_output.forecast_30d
                 ],
             }
-            save_analytics(analytics_dict, session_id)
+            save_analytics(analytics_dict, session_id, user_id=user_id)
             save_session_snapshot(analytics_dict, business_type)
 
             year_month = datetime.now().strftime("%Y-%m")
@@ -586,6 +590,7 @@ def run_pipeline(
     current_cash_balance: float = 0.0,
     session_id:           str   = None,
     is_demo_mode:         bool  = False,
+    user_id:              int   = None,
 ) -> PipelineState:
 
     init_database()
@@ -600,6 +605,7 @@ def run_pipeline(
         "business_type":         business_type,
         "current_cash_balance":  current_cash_balance,
         "is_demo_mode":          is_demo_mode,
+        "user_id":               user_id,
         "reflection_count":      0,
         "max_reflection":        2,
         "current_step":          "start",

@@ -8,6 +8,7 @@ kecuali melalui fungsi-fungsi di file ini.
 
 import sqlite3
 import os
+import bcrypt
 from datetime import datetime
 from pathlib import Path
 
@@ -37,6 +38,20 @@ def init_database():
     """
     conn = get_connection()
     cursor = conn.cursor()
+
+    # ── TABEL 0: USERS ────────────────────────────────────────────
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            business_name   TEXT NOT NULL,
+            email           TEXT NOT NULL UNIQUE,
+            password_hash   TEXT NOT NULL,
+            business_type   TEXT DEFAULT 'general',
+            created_at      TEXT DEFAULT (datetime('now', 'localtime')),
+            last_login      TEXT,
+            total_sessions  INTEGER DEFAULT 0
+        )
+    """)
 
     # ── TABEL 1: TRANSACTIONS ──────────────────────────────────────
     # Menyimpan semua transaksi yang sudah di-parse oleh Parser Agent
@@ -194,15 +209,131 @@ def init_database():
 
     conn.commit()
     conn.close()
-    print("✅ Database initialized successfully")
+
+    # Migrasi: tambah kolom user_id ke semua tabel yang sudah ada
+    migrate_add_user_id()
+
+    print("[OK] Database initialized successfully")
     print(f"   Location: {DB_PATH}")
+
+
+def migrate_add_user_id():
+    """
+    Tambah kolom user_id ke semua tabel yang sudah ada.
+    Aman dijalankan berulang kali (cek dulu sebelum alter).
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    tables = [
+        "transactions", "analytics", "anomalies",
+        "recommendations", "monthly_snapshots",
+        "spending_baselines", "agent_logs", "scenarios",
+    ]
+
+    for table in tables:
+        try:
+            cursor.execute(
+                f"ALTER TABLE {table} ADD COLUMN user_id INTEGER"
+            )
+            print(f"  [OK] Added user_id to {table}")
+        except Exception:
+            pass  # Kolom sudah ada — skip
+
+    conn.commit()
+    conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════
+# HELPER FUNCTIONS — Users
+# ══════════════════════════════════════════════════════════════════
+
+def create_user(business_name: str, email: str, password: str,
+                business_type: str = "general") -> dict | None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM users WHERE email = ?",
+                   (email.lower().strip(),))
+    if cursor.fetchone():
+        conn.close()
+        return None
+    password_hash = bcrypt.hashpw(
+        password.encode('utf-8'), bcrypt.gensalt()
+    ).decode('utf-8')
+    cursor.execute("""
+        INSERT INTO users (business_name, email, password_hash, business_type)
+        VALUES (?, ?, ?, ?)
+    """, (business_name.strip(), email.lower().strip(),
+          password_hash, business_type))
+    user_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return {"id": user_id, "business_name": business_name.strip(),
+            "email": email.lower().strip(), "business_type": business_type}
+
+
+def verify_login(email: str, password: str) -> dict | None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE email = ?",
+                   (email.lower().strip(),))
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        return None
+    user_dict = dict(user)
+    if not bcrypt.checkpw(password.encode('utf-8'),
+                          user_dict["password_hash"].encode('utf-8')):
+        conn.close()
+        return None
+    cursor.execute("""
+        UPDATE users SET last_login = datetime('now', 'localtime'),
+            total_sessions = total_sessions + 1 WHERE id = ?
+    """, (user_dict["id"],))
+    conn.commit()
+    conn.close()
+    user_dict.pop("password_hash", None)
+    return user_dict
+
+
+def get_user_stats(user_id: int) -> dict:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) as total FROM analytics WHERE user_id = ?",
+        (user_id,))
+    total_sessions = cursor.fetchone()["total"]
+    cursor.execute("""
+        SELECT health_score, created_at FROM analytics
+        WHERE user_id = ? ORDER BY created_at DESC LIMIT 3
+    """, (user_id,))
+    recent = [dict(r) for r in cursor.fetchall()]
+    avg_health = (sum(r["health_score"] for r in recent) / len(recent)
+                  if recent else 0)
+    conn.close()
+    return {"total_sessions": total_sessions, "recent_health": recent,
+            "avg_health": round(avg_health, 1)}
+
+
+def get_user_baselines(user_id: int, business_type: str) -> list[dict]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM spending_baselines
+        WHERE user_id = ? AND business_type = ?
+        ORDER BY avg_monthly DESC
+    """, (user_id, business_type))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # ══════════════════════════════════════════════════════════════════
 # HELPER FUNCTIONS — Transaction
 # ══════════════════════════════════════════════════════════════════
 
-def save_transactions(transactions: list[dict], session_id: str) -> int:
+def save_transactions(transactions: list[dict], session_id: str,
+                      user_id: int = None) -> int:
     """Simpan list transaksi ke database. Return jumlah row yang disimpan."""
     conn = get_connection()
     cursor = conn.cursor()
@@ -212,20 +343,17 @@ def save_transactions(transactions: list[dict], session_id: str) -> int:
         cursor.execute("""
             INSERT INTO transactions
                 (date, amount, type, description, category, sub_category,
-                 is_recurring, is_business, confidence, source, session_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 is_recurring, is_business, confidence, source, session_id,
+                 user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            tx.get("date"),
-            tx.get("amount"),
-            tx.get("type"),
-            tx.get("description"),
-            tx.get("category"),
+            tx.get("date"), tx.get("amount"), tx.get("type"),
+            tx.get("description"), tx.get("category"),
             tx.get("sub_category"),
             1 if tx.get("is_recurring") else 0,
             1 if tx.get("is_business", True) else 0,
-            tx.get("confidence", 1.0),
-            tx.get("source", "manual"),
-            session_id,
+            tx.get("confidence", 1.0), tx.get("source", "manual"),
+            session_id, user_id,
         ))
         saved += 1
 
@@ -235,19 +363,15 @@ def save_transactions(transactions: list[dict], session_id: str) -> int:
 
 
 def get_transactions(
-    session_id: str = None,
-    start_date: str = None,
-    end_date: str = None,
-    tx_type: str = None,
-    business_only: bool = True,
+    session_id: str = None, start_date: str = None,
+    end_date: str = None, tx_type: str = None,
+    business_only: bool = True, user_id: int = None,
 ) -> list[dict]:
     """Ambil transaksi dengan berbagai filter."""
     conn = get_connection()
     cursor = conn.cursor()
-
     query = "SELECT * FROM transactions WHERE 1=1"
     params = []
-
     if session_id:
         query += " AND session_id = ?"
         params.append(session_id)
@@ -262,9 +386,10 @@ def get_transactions(
         params.append(tx_type)
     if business_only:
         query += " AND is_business = 1"
-
+    if user_id:
+        query += " AND user_id = ?"
+        params.append(user_id)
     query += " ORDER BY date DESC"
-
     cursor.execute(query, params)
     rows = cursor.fetchall()
     conn.close()
@@ -272,36 +397,29 @@ def get_transactions(
 
 
 def get_spending_by_category(
-    start_date: str = None,
-    end_date: str = None,
-    business_type: str = "general"
+    start_date: str = None, end_date: str = None,
+    business_type: str = "general", user_id: int = None,
 ) -> list[dict]:
     """Ambil total pengeluaran per kategori dalam periode tertentu."""
     conn = get_connection()
     cursor = conn.cursor()
-
     query = """
-        SELECT
-            category,
-            SUM(amount) as total,
-            COUNT(*) as transaction_count,
-            AVG(amount) as avg_amount
+        SELECT category, SUM(amount) as total,
+               COUNT(*) as transaction_count, AVG(amount) as avg_amount
         FROM transactions
-        WHERE type = 'expense'
-          AND is_business = 1
-          AND category IS NOT NULL
+        WHERE type = 'expense' AND is_business = 1 AND category IS NOT NULL
     """
     params = []
-
     if start_date:
         query += " AND date >= ?"
         params.append(start_date)
     if end_date:
         query += " AND date <= ?"
         params.append(end_date)
-
+    if user_id:
+        query += " AND user_id = ?"
+        params.append(user_id)
     query += " GROUP BY category ORDER BY total DESC"
-
     cursor.execute(query, params)
     rows = cursor.fetchall()
     conn.close()
@@ -312,12 +430,11 @@ def get_spending_by_category(
 # HELPER FUNCTIONS — Analytics
 # ══════════════════════════════════════════════════════════════════
 
-def save_analytics(analytics: dict, session_id: str):
+def save_analytics(analytics: dict, session_id: str, user_id: int = None):
     """Simpan hasil kalkulasi Financial Analyst Agent."""
     import json
     conn = get_connection()
     cursor = conn.cursor()
-
     cursor.execute("""
         INSERT INTO analytics (
             session_id, period_start, period_end,
@@ -325,46 +442,41 @@ def save_analytics(analytics: dict, session_id: str):
             burn_rate_daily, burn_rate_monthly, gross_margin,
             runway_days, revenue_consistency,
             health_score, health_score_prev, health_score_industry,
-            health_score_threshold, forecast_30d, narrative, business_type
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            health_score_threshold, forecast_30d, narrative,
+            business_type, user_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         session_id,
-        analytics.get("period_start"),
-        analytics.get("period_end"),
-        analytics.get("total_income", 0),
-        analytics.get("total_expense", 0),
-        analytics.get("net_cashflow", 0),
-        analytics.get("cash_balance", 0),
-        analytics.get("burn_rate_daily", 0),
-        analytics.get("burn_rate_monthly", 0),
-        analytics.get("gross_margin", 0),
-        analytics.get("runway_days", 0),
+        analytics.get("period_start"), analytics.get("period_end"),
+        analytics.get("total_income", 0), analytics.get("total_expense", 0),
+        analytics.get("net_cashflow", 0), analytics.get("cash_balance", 0),
+        analytics.get("burn_rate_daily", 0), analytics.get("burn_rate_monthly", 0),
+        analytics.get("gross_margin", 0), analytics.get("runway_days", 0),
         analytics.get("revenue_consistency", 0),
-        analytics.get("health_score", 0),
-        analytics.get("health_score_prev", 0),
+        analytics.get("health_score", 0), analytics.get("health_score_prev", 0),
         analytics.get("health_score_industry", 0),
         analytics.get("health_score_threshold", 50),
         json.dumps(analytics.get("forecast_30d", [])),
         analytics.get("narrative", ""),
-        analytics.get("business_type", "general"),
+        analytics.get("business_type", "general"), user_id,
     ))
-
     conn.commit()
     conn.close()
 
 
-def get_latest_analytics(business_type: str = None) -> dict | None:
+def get_latest_analytics(business_type: str = None,
+                         user_id: int = None) -> dict | None:
     """Ambil hasil analitik terbaru."""
     conn = get_connection()
     cursor = conn.cursor()
-
-    query = "SELECT * FROM analytics"
+    query = "SELECT * FROM analytics WHERE 1=1"
     params = []
-
     if business_type:
-        query += " WHERE business_type = ?"
+        query += " AND business_type = ?"
         params.append(business_type)
-
+    if user_id:
+        query += " AND user_id = ?"
+        params.append(user_id)
     query += " ORDER BY created_at DESC LIMIT 1"
     cursor.execute(query, params)
     row = cursor.fetchone()
@@ -376,48 +488,43 @@ def get_latest_analytics(business_type: str = None) -> dict | None:
 # HELPER FUNCTIONS — Anomalies
 # ══════════════════════════════════════════════════════════════════
 
-def save_anomalies(anomalies: list[dict], session_id: str):
+def save_anomalies(anomalies: list[dict], session_id: str,
+                   user_id: int = None):
     """Simpan anomali yang ditemukan Anomaly Agent."""
     conn = get_connection()
     cursor = conn.cursor()
-
     for a in anomalies:
         cursor.execute("""
             INSERT INTO anomalies
                 (session_id, category, severity, current_amount,
-                 baseline_amount, deviation_pct, description)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 baseline_amount, deviation_pct, description, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            session_id,
-            a.get("category"),
-            a.get("severity"),
-            a.get("current_amount"),
-            a.get("baseline_amount"),
-            a.get("deviation_pct"),
-            a.get("description"),
+            session_id, a.get("category"), a.get("severity"),
+            a.get("current_amount"), a.get("baseline_amount"),
+            a.get("deviation_pct"), a.get("description"), user_id,
         ))
-
     conn.commit()
     conn.close()
 
 
-def get_anomalies(session_id: str = None, severity: str = None) -> list[dict]:
+def get_anomalies(session_id: str = None, severity: str = None,
+                  user_id: int = None) -> list[dict]:
     """Ambil anomali dengan filter opsional."""
     conn = get_connection()
     cursor = conn.cursor()
-
     query = "SELECT * FROM anomalies WHERE 1=1"
     params = []
-
     if session_id:
         query += " AND session_id = ?"
         params.append(session_id)
     if severity:
         query += " AND severity = ?"
         params.append(severity)
-
+    if user_id:
+        query += " AND user_id = ?"
+        params.append(user_id)
     query += " ORDER BY severity DESC, deviation_pct DESC"
-
     cursor.execute(query, params)
     rows = cursor.fetchall()
     conn.close()
@@ -428,56 +535,53 @@ def get_anomalies(session_id: str = None, severity: str = None) -> list[dict]:
 # HELPER FUNCTIONS — Recommendations
 # ══════════════════════════════════════════════════════════════════
 
-def save_recommendations(recommendations: list[dict], session_id: str):
+def save_recommendations(recommendations: list[dict], session_id: str,
+                         user_id: int = None):
     """Simpan rekomendasi dari Advisor Agent."""
     conn = get_connection()
     cursor = conn.cursor()
-
     for r in recommendations:
         cursor.execute("""
             INSERT INTO recommendations
                 (session_id, priority, title, description, impact,
                  urgency, category, early_warning,
-                 confidence_min, confidence_max)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 confidence_min, confidence_max, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            session_id,
-            r.get("priority"),
-            r.get("title"),
-            r.get("description"),
-            r.get("impact"),
-            r.get("urgency"),
-            r.get("category"),
-            r.get("early_warning"),
-            r.get("confidence_min"),
-            r.get("confidence_max"),
+            session_id, r.get("priority"), r.get("title"),
+            r.get("description"), r.get("impact"), r.get("urgency"),
+            r.get("category"), r.get("early_warning"),
+            r.get("confidence_min"), r.get("confidence_max"), user_id,
         ))
-
     conn.commit()
     conn.close()
 
 
-def get_recommendations(session_id: str = None) -> list[dict]:
+def get_recommendations(session_id: str = None,
+                        user_id: int = None) -> list[dict]:
     """Ambil rekomendasi terbaru."""
     conn = get_connection()
     cursor = conn.cursor()
-
     if session_id:
-        cursor.execute(
-            "SELECT * FROM recommendations WHERE session_id = ? ORDER BY priority",
-            (session_id,)
-        )
+        query = "SELECT * FROM recommendations WHERE session_id = ?"
+        params = [session_id]
+        if user_id:
+            query += " AND user_id = ?"
+            params.append(user_id)
+        query += " ORDER BY priority"
+        cursor.execute(query, params)
     else:
-        # Ambil dari session terakhir
-        cursor.execute("""
+        base = """
             SELECT r.* FROM recommendations r
             JOIN (SELECT session_id, MAX(created_at) as max_date
-                  FROM recommendations GROUP BY session_id
+                  FROM recommendations"""
+        if user_id:
+            base += " WHERE user_id = ?"
+        base += """ GROUP BY session_id
                   ORDER BY max_date DESC LIMIT 1) latest
             ON r.session_id = latest.session_id
-            ORDER BY r.priority
-        """)
-
+            ORDER BY r.priority"""
+        cursor.execute(base, (user_id,) if user_id else ())
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
@@ -488,45 +592,36 @@ def get_recommendations(session_id: str = None) -> list[dict]:
 # ══════════════════════════════════════════════════════════════════
 
 def log_agent_step(
-    session_id: str,
-    agent_name: str,
-    step: int,
-    input_summary: str,
-    reasoning: str,
-    output_summary: str,
-    duration_ms: int = 0,
-    status: str = "success",
+    session_id: str, agent_name: str, step: int,
+    input_summary: str, reasoning: str, output_summary: str,
+    duration_ms: int = 0, status: str = "success",
+    user_id: int = None,
 ):
     """Simpan satu langkah reasoning agent ke log."""
     conn = get_connection()
     cursor = conn.cursor()
-
     cursor.execute("""
         INSERT INTO agent_logs
             (session_id, agent_name, step, input_summary,
-             reasoning, output_summary, duration_ms, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        session_id, agent_name, step,
-        input_summary, reasoning, output_summary,
-        duration_ms, status,
-    ))
-
+             reasoning, output_summary, duration_ms, status, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (session_id, agent_name, step, input_summary,
+          reasoning, output_summary, duration_ms, status, user_id))
     conn.commit()
     conn.close()
 
 
-def get_agent_logs(session_id: str) -> list[dict]:
-    """Ambil semua log agent untuk satu session, urut berdasarkan step."""
+def get_agent_logs(session_id: str, user_id: int = None) -> list[dict]:
+    """Ambil semua log agent untuk satu session."""
     conn = get_connection()
     cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT * FROM agent_logs
-        WHERE session_id = ?
-        ORDER BY agent_name, step
-    """, (session_id,))
-
+    query = "SELECT * FROM agent_logs WHERE session_id = ?"
+    params = [session_id]
+    if user_id:
+        query += " AND user_id = ?"
+        params.append(user_id)
+    query += " ORDER BY agent_name, step"
+    cursor.execute(query, params)
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
@@ -536,75 +631,76 @@ def get_agent_logs(session_id: str) -> list[dict]:
 # HELPER FUNCTIONS — Baselines & Memory
 # ══════════════════════════════════════════════════════════════════
 
-def get_spending_baselines(business_type: str) -> list[dict]:
+def get_spending_baselines(business_type: str,
+                           user_id: int = None) -> list[dict]:
     """Ambil baseline pengeluaran per kategori untuk deteksi anomali."""
     conn = get_connection()
     cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT * FROM spending_baselines
-        WHERE business_type = ?
-        ORDER BY avg_monthly DESC
-    """, (business_type,))
-
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
-
-
-def save_baseline(category: str, business_type: str,
-                  avg_monthly: float, std_deviation: float, sample_months: int):
-    """Simpan atau update baseline per kategori."""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        INSERT INTO spending_baselines
-            (category, business_type, avg_monthly, std_deviation, sample_months)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(category, business_type) DO UPDATE SET
-            avg_monthly = excluded.avg_monthly,
-            std_deviation = excluded.std_deviation,
-            sample_months = excluded.sample_months,
-            updated_at = datetime('now', 'localtime')
-    """, (category, business_type, avg_monthly, std_deviation, sample_months))
-
-    conn.commit()
-    conn.close()
-
-
-def get_monthly_snapshots(business_type: str = None,
-                          last_n_months: int = 6) -> list[dict]:
-    """Ambil snapshot bulanan untuk analisis tren historis."""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    query = "SELECT * FROM monthly_snapshots"
-    params = []
-
-    if business_type:
-        query += " WHERE business_type = ?"
-        params.append(business_type)
-
-    query += " ORDER BY year_month DESC LIMIT ?"
-    params.append(last_n_months)
-
+    query = "SELECT * FROM spending_baselines WHERE business_type = ?"
+    params = [business_type]
+    if user_id:
+        query += " AND user_id = ?"
+        params.append(user_id)
+    query += " ORDER BY avg_monthly DESC"
     cursor.execute(query, params)
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 
-def save_monthly_snapshot(snapshot: dict):
+def save_baseline(category: str, business_type: str,
+                  avg_monthly: float, std_deviation: float,
+                  sample_months: int, user_id: int = None):
+    """Simpan atau update baseline per kategori."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO spending_baselines
+            (category, business_type, avg_monthly, std_deviation,
+             sample_months, user_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(category, business_type) DO UPDATE SET
+            avg_monthly = excluded.avg_monthly,
+            std_deviation = excluded.std_deviation,
+            sample_months = excluded.sample_months,
+            updated_at = datetime('now', 'localtime')
+    """, (category, business_type, avg_monthly, std_deviation,
+          sample_months, user_id))
+    conn.commit()
+    conn.close()
+
+
+def get_monthly_snapshots(business_type: str = None,
+                          last_n_months: int = 6,
+                          user_id: int = None) -> list[dict]:
+    """Ambil snapshot bulanan untuk analisis tren historis."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    query = "SELECT * FROM monthly_snapshots WHERE 1=1"
+    params = []
+    if business_type:
+        query += " AND business_type = ?"
+        params.append(business_type)
+    if user_id:
+        query += " AND user_id = ?"
+        params.append(user_id)
+    query += " ORDER BY year_month DESC LIMIT ?"
+    params.append(last_n_months)
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def save_monthly_snapshot(snapshot: dict, user_id: int = None):
     """Simpan atau update snapshot bulanan."""
     conn = get_connection()
     cursor = conn.cursor()
-
     cursor.execute("""
         INSERT INTO monthly_snapshots
             (year_month, total_income, total_expense, net_cashflow,
-             health_score, burn_rate, runway_days, business_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             health_score, burn_rate, runway_days, business_type, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(year_month) DO UPDATE SET
             total_income = excluded.total_income,
             total_expense = excluded.total_expense,
@@ -614,15 +710,11 @@ def save_monthly_snapshot(snapshot: dict):
             runway_days = excluded.runway_days
     """, (
         snapshot.get("year_month"),
-        snapshot.get("total_income", 0),
-        snapshot.get("total_expense", 0),
-        snapshot.get("net_cashflow", 0),
-        snapshot.get("health_score", 0),
-        snapshot.get("burn_rate", 0),
-        snapshot.get("runway_days", 0),
-        snapshot.get("business_type", "general"),
+        snapshot.get("total_income", 0), snapshot.get("total_expense", 0),
+        snapshot.get("net_cashflow", 0), snapshot.get("health_score", 0),
+        snapshot.get("burn_rate", 0), snapshot.get("runway_days", 0),
+        snapshot.get("business_type", "general"), user_id,
     ))
-
     conn.commit()
     conn.close()
 
