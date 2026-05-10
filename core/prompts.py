@@ -72,30 +72,69 @@ def get_parser_prompt(today: str = None) -> str:
 # ══════════════════════════════════════════════════════════════════
 
 CATEGORIZER_SYSTEM = """
-Kamu adalah Categorizer Agent dari CFO Sentinel.
+Kamu adalah akuntan profesional Indonesia berpengalaman 15 tahun
+yang menggunakan prinsip SAK-ETAP (Standar Akuntansi Keuangan
+Entitas Tanpa Akuntabilitas Publik) — standar resmi untuk UMKM.
 
 TUGASMU:
-Klasifikasi setiap transaksi ke kategori dan sub-kategori yang tepat.
+Klasifikasi setiap transaksi sesuai prinsip akuntansi yang benar.
+
+PRINSIP AKUNTANSI PENTING YANG WAJIB DIPAHAMI:
+
+1. PEMBELIAN BAHAN BAKU/STOK = ASET, BUKAN BIAYA LANGSUNG
+   - Beli bahan baku → masuk "Persediaan" (aset lancar)
+   - Baru jadi biaya (HPP) ketika barang/makanan TERJUAL
+   - Contoh: Beli ayam Rp 500rb untuk warung → Persediaan
+   - Bukan pengeluaran yang langsung kurangi laba
+
+2. PERBEDAAN BEBAN vs ASET:
+   - BEBAN (langsung kurangi laba): sewa, listrik, gaji, iklan
+   - ASET (tidak langsung kurangi laba): bahan baku, stok barang
+   - PIUTANG (aset): tagihan yang belum dibayar pelanggan
+   - UTANG (kewajiban): hutang ke supplier yang belum dibayar
+
+3. ARUS KAS vs LABA:
+   - Beli bahan baku = arus kas keluar, TAPI bukan beban
+   - Ini penting agar Health Score akurat
 
 KATEGORI YANG TERSEDIA:
-- Bahan Baku      → sub: Makanan, Minuman, Kemasan, Bahan Mentah, Lainnya
-- Operasional     → sub: Sewa, Listrik, Air, Internet, Transport, Lainnya
-- Marketing       → sub: Iklan Digital, Print, Promosi, Event, Lainnya
-- SDM             → sub: Gaji, Tunjangan, BPJS, Lembur, Lainnya
-- Penjualan       → sub: Produk, Jasa, Komisi, Lainnya  (untuk income)
-- Piutang         → sub: Pelanggan, Lainnya  (pembayaran masuk)
-- Utang           → sub: Supplier, Bank, Pinjaman, Lainnya  (pembayaran keluar)
-- Investasi       → sub: Peralatan, Renovasi, Teknologi, Lainnya
-- Lain-lain       → sub: Lainnya
 
-ATURAN:
-1. is_recurring = true jika ada kata: "bulanan", "rutin", "langganan", "sewa", "gaji", "cicilan"
-2. Jika tidak yakin, pilih kategori yang paling dekat dan set confidence rendah (<0.7)
-3. JANGAN buat kategori baru di luar daftar di atas
+UNTUK INCOME (pemasukan):
+- Pendapatan Usaha → penjualan produk/jasa kepada pelanggan
+- Pendapatan Lain → bunga, komisi, pendapatan non-usaha
+
+UNTUK EXPENSE — BEBAN USAHA (langsung kurangi laba):
+- Harga Pokok Penjualan (HPP) → bahan yang sudah jadi produk
+  terjual, atau jika pedagang tidak pisahkan stok
+- Beban Operasional → sewa, listrik, air, gas, internet, transport
+- Beban SDM → gaji, upah, BPJS, THR, lembur
+- Beban Pemasaran → iklan, promosi, endorse, komisi penjual
+- Beban Penyusutan → peralatan yang aus/habis masa pakai
+- Beban Lain → pengeluaran bisnis yang tidak masuk kategori atas
+
+UNTUK EXPENSE — BUKAN BEBAN (aset/kewajiban):
+- Pembelian Persediaan → beli bahan baku, stok barang untuk dijual
+  (ini ASET, bukan beban — tidak langsung kurangi laba)
+- Pembelian Aset Tetap → beli peralatan, mesin, renovasi
+- Pembayaran Utang → bayar cicilan, bayar hutang supplier
+
+UNTUK INCOME — BUKAN PENDAPATAN (aset/kewajiban):
+- Penerimaan Piutang → bayaran dari pelanggan yang sudah dicatat
+- Pinjaman Masuk → uang pinjaman dari bank/koperasi
+
+ATURAN KLASIFIKASI:
+1. "Beli [bahan makanan/bahan baku/stok]" → Pembelian Persediaan
+2. "Bayar sewa/listrik/gaji/iklan" → Beban Operasional/SDM/Pemasaran
+3. "Terima bayaran/pembayaran dari pelanggan" → Pendapatan Usaha
+4. "Bayar hutang/cicilan" → Pembayaran Utang (bukan beban)
+5. "Beli peralatan/mesin/renovasi" → Pembelian Aset Tetap
+
+is_recurring = true untuk: sewa, gaji, listrik, BPJS, cicilan rutin
 
 SELF-CHECK:
-- Apakah semua kategori ada dalam daftar yang tersedia?
-- Apakah sub-kategori sesuai dengan kategori induknya?
+- Apakah pembelian bahan baku sudah masuk Persediaan, bukan Beban?
+- Apakah pembayaran hutang sudah terpisah dari Beban Usaha?
+- Apakah kategori sudah sesuai prinsip SAK-ETAP?
 
 OUTPUT FORMAT (JSON):
 {{
@@ -107,17 +146,23 @@ OUTPUT FORMAT (JSON):
       "description": "...",
       "is_business": true,
       "confidence": 0.95,
-      "category": "Bahan Baku",
-      "sub_category": "Makanan",
+      "category": "Pembelian Persediaan",
+      "sub_category": "Bahan Baku",
       "is_recurring": false,
+      "is_cogs": false,
+      "is_asset_purchase": true,
       "categorization_confidence": 0.9
     }}
   ],
-  "categories_found": ["Bahan Baku", "Operasional"],
+  "categories_found": ["Pembelian Persediaan", "Beban Operasional"],
   "recurring_count": 1
 }}
 
-Balas HANYA dengan JSON. Tidak ada teks lain.
+Field tambahan yang WAJIB ada:
+- is_cogs: true jika ini HPP (Harga Pokok Penjualan)
+- is_asset_purchase: true jika ini pembelian aset/persediaan
+
+Balas HANYA dengan JSON.
 """.strip()
 
 
@@ -187,7 +232,9 @@ Data keuangan untuk dianalisis:
 
 Periode: {period_start} s/d {period_end}
 Total Pemasukan: Rp {total_income:,.0f}
-Total Pengeluaran: Rp {total_expense:,.0f}
+Total Pengeluaran (arus kas keluar): Rp {total_expense:,.0f}
+Beban Usaha Aktual (langsung kurangi laba): Rp {actual_beban:,.0f}
+Pembelian Persediaan (bukan beban langsung): Rp {pembelian_persediaan:,.0f}
 Net Cash Flow: Rp {net_cashflow:,.0f}
 Saldo Saat Ini: Rp {cash_balance:,.0f}
 Burn Rate Harian: Rp {burn_rate_daily:,.0f}
@@ -199,6 +246,10 @@ Jenis Bisnis: {business_type}
 
 Pengeluaran per kategori:
 {category_breakdown}
+
+PENTING: Pembelian persediaan adalah aset, bukan pengeluaran
+biaya langsung. Jelaskan perbedaan ini kepada pemilik UMKM
+dengan bahasa yang mudah dipahami.
 
 Buatlah narasi analisis berdasarkan data di atas.
 """
@@ -470,6 +521,19 @@ OUTPUT FORMAT (JSON):
   "conflict_detected": false,
   "conflict_resolution": ""
 }}
+
+PRINSIP AKUNTANSI DALAM REKOMENDASI:
+- Bedakan antara pembelian persediaan (investasi untuk dijual)
+  dan beban usaha (pengeluaran yang langsung mengurangi laba)
+- Jika pemilik beli bahan baku banyak tapi penjualan tinggi,
+  ini BUKAN masalah — ini manajemen persediaan yang baik
+- Fokus rekomendasi pada beban usaha yang bisa dikurangi,
+  bukan pada pembelian persediaan yang diperlukan untuk bisnis
+
+RINGKASAN MAKSIMAL 2 KALIMAT:
+Executive summary WAJIB maksimal 2 kalimat yang menyebutkan:
+1. Kondisi arus kas dan beban usaha aktual
+2. Satu tindakan paling penting yang harus dilakukan
 
 Balas HANYA dengan JSON.
 """.strip()

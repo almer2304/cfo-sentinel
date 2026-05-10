@@ -71,8 +71,31 @@ class ParserOutput(BaseModel):
 # ══════════════════════════════════════════════════════════════════
 
 VALID_CATEGORIES = [
-    "Bahan Baku", "Operasional", "Marketing", "SDM",
-    "Penjualan", "Piutang", "Utang", "Investasi", "Lain-lain",
+    # Pendapatan
+    "Pendapatan Usaha",
+    "Pendapatan Lain",
+    # Beban Usaha (langsung kurangi laba)
+    "Harga Pokok Penjualan (HPP)",
+    "Beban Operasional",
+    "Beban SDM",
+    "Beban Pemasaran",
+    "Beban Penyusutan",
+    "Beban Lain",
+    # Bukan Beban (aset/kewajiban)
+    "Pembelian Persediaan",
+    "Pembelian Aset Tetap",
+    "Pembayaran Utang",
+    "Penerimaan Piutang",
+    # Legacy (untuk backward compatibility)
+    "Bahan Baku",
+    "Operasional",
+    "Marketing",
+    "SDM",
+    "Penjualan",
+    "Piutang",
+    "Utang",
+    "Investasi",
+    "Lain-lain",
 ]
 
 
@@ -87,6 +110,10 @@ class CategorizedTransaction(BaseModel):
     sub_category:               str
     is_recurring:               bool  = False
     categorization_confidence:  float = Field(default=1.0, ge=0.0, le=1.0)
+    is_cogs:                    bool  = Field(default=False,
+        description="True jika ini HPP")
+    is_asset_purchase:          bool  = Field(default=False,
+        description="True jika ini pembelian aset/persediaan")
 
     @field_validator("category")
     @classmethod

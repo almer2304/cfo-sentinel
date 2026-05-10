@@ -258,38 +258,100 @@ def render_input_section(config: dict):
     """Render area input transaksi."""
     st.header("📝 Input Transaksi")
 
-    placeholder = (
-        "Contoh:\n"
-        "Senin beli bahan baku 500rb, bayar listrik 200rb\n"
-        "Selasa dapet orderan 2jt dari pelanggan\n"
-        "Rabu gaji karyawan 1.5jt, beli kemasan 150rb"
+    # Ganti text_area dengan instruksi yang jelas
+    raw_input = st.text_area(
+        "Ceritakan transaksi bisnis kamu (bebas format, "
+        "Bahasa Indonesia):",
+        placeholder=(
+            "Contoh:\n"
+            "Senin beli bahan baku 500rb, bayar listrik 200rb\n"
+            "Selasa dapat orderan 2jt dari pelanggan\n"
+            "Rabu gaji karyawan 1.5jt, beli kemasan 150rb"
+        ),
+        height=160,
+        key="raw_input",
+        help="Tulis semua transaksi kamu, lalu klik tombol "
+             "ANALISIS di bawah"
     )
 
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        raw_input = st.text_area(
-            "Ceritakan transaksi bisnis Anda (bebas format, Bahasa Indonesia):",
-            height=150,
-            placeholder=placeholder,
-            key="raw_input",
-        )
-        st.caption("💡 Atau gunakan input suara — cocok untuk yang lebih suka bicara daripada mengetik")
-        render_voice_input()
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if config["demo_mode"]:
-            st.info("🎬 Mode demo aktif")
-            if st.button("▶️ Jalankan Demo", use_container_width=True, type="primary"):
-                _run_demo_pipeline()
-        else:
-            if st.button("🚀 Analisis", use_container_width=True, type="primary",
-                         disabled=not raw_input.strip()):
-                _run_live_pipeline(raw_input, config)
+    # Tambahkan caption instruksi yang jelas
+    st.caption(
+        "✏️ Setelah selesai menulis, klik tombol "
+        "**🚀 ANALISIS** di bawah ini"
+    )
 
-        if st.button("🔄 Reset", use_container_width=True):
-            st.session_state.pipeline_result = None
-            st.session_state.chat_history = []
-            st.rerun()
+    # Buat tombol Analisis BESAR dan selalu terlihat
+    reset_clicked = False
+    analyze_clicked = False
+
+    if config["demo_mode"]:
+        col_btn1, col_btn2 = st.columns([3, 1])
+        with col_btn1:
+            if st.button("▶️ JALANKAN DEMO", type="primary",
+                         use_container_width=True,
+                         help="Gunakan data demo untuk melihat contoh analisis"):
+                _run_demo_pipeline()
+        with col_btn2:
+            reset_clicked = st.button(
+                "🔄 Reset",
+                use_container_width=True,
+                help="Hapus hasil analisis"
+            )
+    else:
+        col_btn1, col_btn2 = st.columns([3, 1])
+        with col_btn1:
+            analyze_clicked = st.button(
+                "🚀 ANALISIS SEKARANG",
+                type="primary",
+                use_container_width=True,
+                help="Klik untuk menganalisis transaksi kamu",
+                disabled=not raw_input.strip()
+            )
+        with col_btn2:
+            reset_clicked = st.button(
+                "🔄 Reset",
+                use_container_width=True,
+                help="Hapus hasil analisis"
+            )
+
+        if analyze_clicked:
+            _run_live_pipeline(raw_input, config)
+
+    if reset_clicked:
+        st.session_state.pipeline_result = None
+        st.session_state.chat_history = []
+        st.rerun()
+
+    # Tambahkan JavaScript untuk mobile UX
+    st.markdown("""
+<script>
+// Pastikan tombol Analisis mudah ditekan di mobile
+document.addEventListener('DOMContentLoaded', function() {
+    const textareas = document.querySelectorAll('textarea');
+    textareas.forEach(function(textarea) {
+        textarea.addEventListener('keydown', function(e) {
+            // Ctrl+Enter atau Cmd+Enter tetap bisa digunakan
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                // Cari tombol Analisis dan klik
+                const buttons = document.querySelectorAll('button');
+                buttons.forEach(function(btn) {
+                    if (btn.textContent.includes('ANALISIS')) {
+                        btn.click();
+                    }
+                });
+            }
+        });
+    });
+});
+</script>
+""", unsafe_allow_html=True)
+
+    # Fitur voice input membutuhkan HTTPS
+    st.info(
+        "🎤 **Fitur Input Suara** akan tersedia setelah "
+        "koneksi HTTPS diaktifkan. Saat ini gunakan input teks."
+    )
 
 
 def _run_demo_pipeline():

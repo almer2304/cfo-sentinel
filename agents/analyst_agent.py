@@ -118,6 +118,33 @@ def run_analyst_agent(
     period_end     = today.strftime("%Y-%m-%d")
     days_in_period = max(today.day, 1)
 
+    # ── Pisahkan transaksi berdasarkan jenis akuntansi SAK-ETAP ──
+    # Asset purchase categories (not actual expenses that reduce profit)
+    _ASSET_CATEGORIES = {
+        "Pembelian Persediaan", "Pembelian Aset Tetap",
+        "Pembayaran Utang", "Bahan Baku", "Investasi",
+    }
+
+    actual_beban = sum(
+        _safe_get(t, "amount", 0)
+        for t in categorizer_output.transactions
+        if _safe_get(t, "type") == "expense"
+        and not getattr(t, 'is_asset_purchase', False)
+        and _safe_get(t, "category", "") not in _ASSET_CATEGORIES
+        and _safe_get(t, "is_business", True)
+    )
+
+    pembelian_persediaan = sum(
+        _safe_get(t, "amount", 0)
+        for t in categorizer_output.transactions
+        if _safe_get(t, "type") == "expense"
+        and (
+            getattr(t, 'is_asset_purchase', False)
+            or _safe_get(t, "category", "") in _ASSET_CATEGORIES
+        )
+        and _safe_get(t, "is_business", True)
+    )
+
     # ── Metrik dasar ─────────────────────────────────────────────
     burn_rate_daily   = total_expense / days_in_period
     burn_rate_monthly = burn_rate_daily * 30
@@ -137,9 +164,10 @@ def run_analyst_agent(
     min_runway = max(0, expected_runway * 0.8)
     max_runway = expected_runway * 1.2
 
-    # Gross margin: hanya positif
+    # Gross margin: gunakan actual_beban (bukan total_expense)
+    # agar pembelian persediaan tidak menurunkan margin
     if total_income > 0:
-        gross_margin = max(0, (net_cashflow / total_income) * 100)
+        gross_margin = max(0, ((total_income - actual_beban) / total_income) * 100)
     else:
         gross_margin = 0
 
@@ -208,6 +236,8 @@ def run_analyst_agent(
         "period_end":            period_end,
         "total_income":          total_income,
         "total_expense":         total_expense,
+        "actual_beban":          actual_beban,
+        "pembelian_persediaan":  pembelian_persediaan,
         "net_cashflow":          net_cashflow,
         "cash_balance":          cash_balance,
         "burn_rate_daily":       burn_rate_daily,

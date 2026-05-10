@@ -9,7 +9,8 @@ kecuali melalui fungsi-fungsi di file ini.
 import sqlite3
 import os
 import bcrypt
-from datetime import datetime
+import secrets
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Path ke file database
@@ -207,6 +208,18 @@ def init_database():
         )
     """)
 
+    # ── TABEL 9: SESSION TOKENS ────────────────────────────────────
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS session_tokens (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     INTEGER NOT NULL,
+            token       TEXT NOT NULL UNIQUE,
+            created_at  TEXT DEFAULT (datetime('now', 'localtime')),
+            expires_at  TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -313,6 +326,83 @@ def get_user_stats(user_id: int) -> dict:
     conn.close()
     return {"total_sessions": total_sessions, "recent_health": recent,
             "avg_health": round(avg_health, 1)}
+
+
+def create_session_token(user_id: int) -> str:
+    """Buat token sesi baru untuk user."""
+    token = secrets.token_urlsafe(32)
+    expires_at = (
+        datetime.now() + timedelta(days=7)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # Hapus token lama milik user ini
+    cursor.execute(
+        "DELETE FROM session_tokens WHERE user_id = ?",
+        (user_id,)
+    )
+
+    cursor.execute("""
+        INSERT INTO session_tokens (user_id, token, expires_at)
+        VALUES (?, ?, ?)
+    """, (user_id, token, expires_at))
+
+    conn.commit()
+    conn.close()
+    return token
+
+
+def verify_session_token(token: str) -> dict | None:
+    """
+    Verifikasi token sesi.
+    Return user dict jika valid, None jika tidak.
+    """
+    if not token:
+        return None
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT u.*, st.expires_at as token_expires_at
+        FROM session_tokens st
+        JOIN users u ON st.user_id = u.id
+        WHERE st.token = ?
+    """, (token,))
+
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    row_dict = dict(row)
+
+    # Cek apakah token sudah expired
+    expires = datetime.strptime(
+        row_dict["token_expires_at"],
+        "%Y-%m-%d %H:%M:%S"
+    )
+    if datetime.now() > expires:
+        return None
+
+    row_dict.pop("password_hash", None)
+    row_dict.pop("token_expires_at", None)
+    return row_dict
+
+
+def delete_session_token(user_id: int):
+    """Hapus semua token sesi user (logout)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM session_tokens WHERE user_id = ?",
+        (user_id,)
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_user_baselines(user_id: int, business_type: str) -> list[dict]:
