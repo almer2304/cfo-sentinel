@@ -23,6 +23,7 @@ load_dotenv()
 
 from core.database import init_database, get_agent_logs, get_transactions
 from core.schemas import PipelineState
+from dashboard.pdf_export import generate_pdf_report
 
 # ── Page config ────────────────────────────────────────────────────
 st.set_page_config(
@@ -57,6 +58,9 @@ def _init_session():
         st.session_state.quick_question = ""
     if "is_demo" not in st.session_state:
         st.session_state.is_demo = os.getenv("DEMO_MODE", "false").lower() == "true"
+    if "app_initialized" not in st.session_state:
+        st.session_state["app_initialized"] = True
+        st.session_state["active_tab"] = "Cara Pakai"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -109,6 +113,143 @@ def render_sidebar() -> dict:
 # INPUT SECTION
 # ══════════════════════════════════════════════════════════════════
 
+def render_voice_input():
+    voice_html = """
+    <div style="margin: 8px 0;">
+        <button id="voiceBtn" onclick="toggleVoice()" 
+            style="background:#dc2626;color:white;border:none;
+                   border-radius:8px;padding:10px 20px;
+                   cursor:pointer;font-size:14px;
+                   display:flex;align-items:center;gap:8px;">
+            🎤 Bicara untuk Input Transaksi
+        </button>
+        <div id="statusDiv" style="margin-top:8px;
+             font-size:12px;color:#9ca3af;"></div>
+        <div id="resultDiv" style="margin-top:8px;
+             padding:8px;background:#1f2937;border-radius:6px;
+             font-size:13px;color:#e5e7eb;display:none;"></div>
+        <button id="copyBtn" onclick="copyResult()" 
+            style="display:none;margin-top:8px;
+                   background:#059669;color:white;border:none;
+                   border-radius:6px;padding:6px 14px;
+                   cursor:pointer;font-size:13px;">
+            📋 Salin ke Input Transaksi
+        </button>
+    </div>
+
+    <script>
+    let recognition;
+    let finalTranscript = '';
+    let isListening = false;
+
+    function toggleVoice() {
+        if (isListening) {
+            stopVoice();
+        } else {
+            startVoice();
+        }
+    }
+
+    function startVoice() {
+        if (!('webkitSpeechRecognition' in window) && 
+            !('SpeechRecognition' in window)) {
+            document.getElementById('statusDiv').innerHTML = 
+                '❌ Browser kamu tidak mendukung input suara. Gunakan Chrome.';
+            return;
+        }
+
+        const SpeechRecognition = window.SpeechRecognition || 
+                                   window.webkitSpeechRecognition;
+        recognition = new SpeechRecognition();
+        recognition.lang = 'id-ID';
+        recognition.continuous = true;
+        recognition.interimResults = true;
+
+        recognition.onstart = function() {
+            isListening = true;
+            document.getElementById('voiceBtn').innerHTML = 
+                '⏹️ Klik untuk Berhenti';
+            document.getElementById('voiceBtn').style.background = 
+                '#dc2626';
+            document.getElementById('statusDiv').innerHTML = 
+                '🔴 Sedang mendengarkan... ceritakan transaksi kamu';
+            finalTranscript = '';
+        };
+
+        recognition.onresult = function(event) {
+            let interimTranscript = '';
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                if (event.results[i].isFinal) {
+                    finalTranscript += event.results[i][0].transcript + ' ';
+                } else {
+                    interimTranscript += event.results[i][0].transcript;
+                }
+            }
+            
+            let display = finalTranscript;
+            if (interimTranscript) {
+                display += '<span style="color:#9ca3af">' + 
+                            interimTranscript + '</span>';
+            }
+            
+            document.getElementById('resultDiv').style.display = 'block';
+            document.getElementById('resultDiv').innerHTML = display;
+            
+            if (finalTranscript.trim()) {
+                document.getElementById('copyBtn').style.display = 
+                    'inline-block';
+            }
+        };
+
+        recognition.onerror = function(event) {
+            document.getElementById('statusDiv').innerHTML = 
+                '❌ Error: ' + event.error + 
+                '. Pastikan kamu izinkan akses mikrofon.';
+            stopVoice();
+        };
+
+        recognition.onend = function() {
+            if (isListening) {
+                recognition.start();
+            }
+        };
+
+        recognition.start();
+    }
+
+    function stopVoice() {
+        isListening = false;
+        if (recognition) recognition.stop();
+        document.getElementById('voiceBtn').innerHTML = 
+            '🎤 Bicara untuk Input Transaksi';
+        document.getElementById('statusDiv').innerHTML = 
+            '✅ Selesai. Klik "Salin ke Input Transaksi" untuk menggunakan.';
+    }
+
+    function copyResult() {
+        const text = finalTranscript.trim();
+        const encoded = encodeURIComponent(text);
+        window.parent.postMessage({
+            type: 'streamlit:setComponentValue',
+            value: text
+        }, '*');
+        
+        navigator.clipboard.writeText(text).then(() => {
+            document.getElementById('statusDiv').innerHTML = 
+                '✅ Teks disalin! Paste ke kotak input transaksi di atas.';
+        });
+    }
+    </script>
+    """
+    
+    result = st.components.v1.html(
+        voice_html, 
+        height=200,
+        scrolling=False
+    )
+    return result
+
+
 def render_input_section(config: dict):
     """Render area input transaksi."""
     st.header("📝 Input Transaksi")
@@ -128,6 +269,8 @@ def render_input_section(config: dict):
             placeholder=placeholder,
             key="raw_input",
         )
+        st.caption("💡 Atau gunakan input suara — cocok untuk yang lebih suka bicara daripada mengetik")
+        render_voice_input()
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
         if config["demo_mode"]:
@@ -150,6 +293,7 @@ def _run_demo_pipeline():
     with st.spinner("🎬 Memuat demo..."):
         from dashboard.demo_mode import get_demo_state
         st.session_state.pipeline_result = get_demo_state()
+    st.session_state["active_tab"] = "Overview"
     st.success("Demo loaded!")
     st.rerun()
 
@@ -168,6 +312,7 @@ def _run_live_pipeline(raw_input: str, config: dict):
             )
             progress.progress(100, "Selesai!")
             st.session_state.pipeline_result = result
+            st.session_state["active_tab"] = "Overview"
             st.success("✅ Analisis selesai!")
             st.rerun()
         except Exception as e:
@@ -181,17 +326,22 @@ def _run_live_pipeline(raw_input: str, config: dict):
 
 def render_results(state: PipelineState):
     """Render seluruh hasil analisis."""
-    tabs = st.tabs([
-        "📖 Cara Pakai",
-        "📊 Overview",
-        "⚠️ Anomali",
-        "🎯 Skenario",
-        "💡 Rekomendasi",
-        "📈 Forecast",
-        "🤖 Reasoning Log",
-        "💬 Tanya CFO",
-        "💬 Panduan Bertanya",
-    ])
+    tab_names = [
+        "📖 Cara Pakai", "🏠 Overview", "⚠️ Anomali", "🎯 Skenario",
+        "💡 Rekomendasi", "📈 Forecast", "🤖 Reasoning Log",
+        "💬 Tanya CFO", "❓ Panduan Bertanya",
+    ]
+
+    # Determine default tab index from session state
+    active = st.session_state.get("active_tab", "Cara Pakai")
+    tab_map = {
+        "Cara Pakai": 0, "Overview": 1, "Anomali": 2, "Skenario": 3,
+        "Rekomendasi": 4, "Forecast": 5, "Reasoning Log": 6,
+        "Tanya CFO": 7, "Panduan Bertanya": 8,
+    }
+    default_idx = tab_map.get(active, 0)
+
+    tabs = st.tabs(tab_names)
 
     with tabs[0]: render_how_to_use()
     with tabs[1]: render_overview(state)
@@ -232,18 +382,19 @@ def render_overview(state: PipelineState):
     with col1:
         delta_hs = hs.current - hs.previous_month
         st.metric(
-            "Health Score",
+            "Skor Kesehatan Bisnis",
             f"{hs.current:.0f}/100",
             f"{delta_hs:+.0f} vs bulan lalu",
             delta_color="normal" if delta_hs >= 0 else "inverse",
         )
+        st.caption("* Perbandingan dengan estimasi awal saat pertama menggunakan CFO Sentinel")
     with col2:
         st.metric("Saldo Kas", f"Rp {analyst.cash_balance:,.0f}")
     with col3:
-        st.metric("Runway", f"{analyst.runway_days.expected:.0f} hari",
+        st.metric("Uang Bertahan Sampai", f"{analyst.runway_days.expected:.0f} hari",
                   f"min {analyst.runway_days.minimum:.0f}d")
     with col4:
-        st.metric("Gross Margin", f"{analyst.gross_margin:.1f}%")
+        st.metric("Keuntungan per Penjualan", f"{analyst.gross_margin:.1f}%")
 
     # Metrik baris 2
     col1, col2, col3, col4 = st.columns(4)
@@ -252,10 +403,10 @@ def render_overview(state: PipelineState):
     with col2:
         st.metric("Total Pengeluaran", f"Rp {analyst.total_expense:,.0f}")
     with col3:
-        st.metric("Net Cash Flow", f"Rp {analyst.net_cashflow:,.0f}",
+        st.metric("Sisa Uang Bersih", f"Rp {analyst.net_cashflow:,.0f}",
                   delta_color="normal" if analyst.net_cashflow >= 0 else "inverse")
     with col4:
-        st.metric("Burn Rate/Hari", f"Rp {analyst.burn_rate_daily:,.0f}")
+        st.metric("Uang Habis per Hari", f"Rp {analyst.burn_rate_daily:,.0f}")
 
     st.divider()
 
@@ -280,7 +431,7 @@ def render_overview(state: PipelineState):
                     "value": 50,
                 },
             },
-            title={"text": f"Health Score<br><sub>{hs.status}</sub>"},
+            title={"text": f"Skor Kesehatan Bisnis<br><sub>{hs.status}</sub>"},
         ))
         fig.update_layout(height=280, margin=dict(t=40, b=20))
         st.plotly_chart(fig, use_container_width=True)
@@ -316,6 +467,9 @@ def render_overview(state: PipelineState):
     st.subheader("📋 Analisis")
     st.write(analyst.narrative)
 
+    # Riwayat perbandingan antar periode
+    render_period_comparison()
+
 
 def render_anomalies(state: PipelineState):
     """Tab 2: Anomali yang ditemukan."""
@@ -327,16 +481,15 @@ def render_anomalies(state: PipelineState):
     risk_colors = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🔴", "CRITICAL": "🚨"}
     sev_colors  = {"LOW": "blue", "MEDIUM": "orange", "HIGH": "red"}
 
-    st.subheader(f"Risk Level: {risk_colors.get(anomaly.overall_risk_level, '?')} {anomaly.overall_risk_level}")
+    st.subheader(f"Tingkat Risiko: {risk_colors.get(anomaly.overall_risk_level, '?')} {anomaly.overall_risk_level}")
 
     if not anomaly.anomalies:
         st.success("✅ Tidak ada anomali terdeteksi. Pengeluaran dalam batas normal.")
         return
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Anomali", anomaly.total_anomalies)
-    col2.metric("Severity HIGH", anomaly.high_severity_count)
-    col3.metric("Analyst Valid", "✅ Ya" if anomaly.analyst_output_valid else "❌ Perlu koreksi")
+    col1, col2 = st.columns(2)
+    col1.metric("Pengeluaran Tidak Biasa", anomaly.total_anomalies)
+    col2.metric("⚠️ Sangat Perlu Diperhatikan", anomaly.high_severity_count)
 
     st.divider()
     for a in anomaly.anomalies:
@@ -348,11 +501,13 @@ def render_anomalies(state: PipelineState):
         cur = a.current_amount if hasattr(a, "current_amount") else a.get("current_amount", 0)
         base = a.baseline_amount if hasattr(a, "baseline_amount") else a.get("baseline_amount", 0)
 
+        sev_label = {"HIGH": "⚠️ Sangat Perlu Diperhatikan", "MEDIUM": "🔶 Perlu Diperhatikan", "LOW": "🔵 Perlu Dicermati"}.get(sev, sev)
         icon = "🔴" if sev == "HIGH" else "🟡" if sev == "MEDIUM" else "🔵"
-        with st.expander(f"{icon} [{sev}] {cat} — Deviasi {dev:+.0f}%", expanded=sev=="HIGH"):
+        with st.expander(f"{icon} {cat} — {sev_label} — Perbedaan dari Biasanya {dev:+.0f}%", expanded=sev=="HIGH"):
             col1, col2 = st.columns(2)
             col1.metric("Bulan Ini", f"Rp {cur:,.0f}")
-            col2.metric("Baseline", f"Rp {base:,.0f}", f"{dev:+.0f}%")
+            col2.metric("Rata-rata Biasanya", f"Rp {base:,.0f}", f"{dev:+.0f}%")
+            st.caption("📊 Rata-rata berdasarkan data historis dan estimasi industri kuliner")
             st.write(desc)
             if action:
                 st.info(f"💡 **Saran:** {action}")
@@ -433,6 +588,29 @@ def render_recommendations(state: PipelineState):
     st.markdown(advisor.detailed_advice)
     st.caption(f"ℹ️ {advisor.uncertainty_statement}")
 
+    # PDF Export section
+    if st.session_state.get("pipeline_result"):
+        result = st.session_state["pipeline_result"]
+        st.markdown("---")
+        st.markdown("### 📄 Download Laporan")
+        st.markdown(
+            "Simpan hasil analisis ini sebagai PDF untuk arsip "
+            "atau ditunjukkan ke bank/investor."
+        )
+
+        try:
+            pdf_bytes = generate_pdf_report(result)
+            tanggal = datetime.now().strftime("%Y%m%d_%H%M")
+            st.download_button(
+                label="📥 Download Laporan PDF",
+                data=pdf_bytes,
+                file_name=f"laporan_cfo_sentinel_{tanggal}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        except Exception as e:
+            st.warning(f"Laporan PDF tidak dapat dibuat: {e}")
+
 
 def render_forecast(state: PipelineState):
     """Tab 5: Forecast 30 hari."""
@@ -440,6 +618,16 @@ def render_forecast(state: PipelineState):
     if not analyst or not analyst.forecast_30d:
         st.warning("Tidak ada data forecast.")
         return
+
+    st.info("""
+📈 **Grafik ini menunjukkan perkiraan saldo kas kamu 30 hari ke depan.**
+
+Garis hijau = perkiraan saldo kamu setiap hari
+Garis merah putus = titik bahaya (uang habis)
+Area abu-abu = kemungkinan terbaik dan terburuk
+
+⚠️ Asumsi: pengeluaran tetap sama seperti sekarang dan tidak ada pemasukan baru yang tercatat. Hasil nyata bisa berbeda jika ada perubahan.
+""")
 
     df = pd.DataFrame([
         {
@@ -495,9 +683,9 @@ def render_forecast(state: PipelineState):
 
     # Runway summary
     col1, col2, col3 = st.columns(3)
-    col1.metric("Runway Min", f"{analyst.runway_days.minimum:.0f} hari")
-    col2.metric("Runway Ekspektasi", f"{analyst.runway_days.expected:.0f} hari")
-    col3.metric("Runway Max", f"{analyst.runway_days.maximum:.0f} hari")
+    col1.metric("🔴 Skenario Terburuk", f"{analyst.runway_days.minimum:.0f} hari")
+    col2.metric("✅ Perkiraan Normal", f"{analyst.runway_days.expected:.0f} hari")
+    col3.metric("🟢 Skenario Terbaik", f"{analyst.runway_days.maximum:.0f} hari")
     st.caption(f"_Asumsi: {analyst.runway_days.assumption}_")
 
 
@@ -841,6 +1029,117 @@ def render_question_guide():
 
 
 # ══════════════════════════════════════════════════════════════════
+# PERIOD COMPARISON
+# ══════════════════════════════════════════════════════════════════
+
+def render_period_comparison():
+    from core.database import get_connection
+    import json
+
+    st.markdown("---")
+    st.markdown("### 📅 Riwayat Kondisi Bisnis")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT period_start, period_end, total_income,
+               total_expense, net_cashflow, health_score,
+               runway_days, burn_rate_daily, narrative,
+               created_at
+        FROM analytics
+        ORDER BY created_at DESC
+        LIMIT 6
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows or len(rows) < 2:
+        st.info(
+            "💡 Lakukan analisis minimal 2 kali untuk melihat "
+            "perbandingan antar periode. Semakin sering kamu "
+            "input transaksi, semakin akurat gambarannya."
+        )
+        return
+
+    # Tabel perbandingan
+    data = []
+    for row in rows:
+        hs = row["health_score"] or 0
+        if hs >= 65:
+            status = "✅ Sehat"
+        elif hs >= 50:
+            status = "⚠️ Waspada"
+        else:
+            status = "🔴 Bahaya"
+
+        data.append({
+            "Tanggal Analisis": row["created_at"][:10],
+            "Pemasukan": f"Rp {(row['total_income'] or 0):,.0f}",
+            "Pengeluaran": f"Rp {(row['total_expense'] or 0):,.0f}",
+            "Sisa Bersih": f"Rp {(row['net_cashflow'] or 0):,.0f}",
+            "Skor Kesehatan": f"{hs:.0f}/100",
+            "Status": status,
+            "Uang Bertahan": f"{(row['runway_days'] or 0):.0f} hari",
+        })
+
+    df = pd.DataFrame(data)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # Highlight perubahan antara 2 analisis terakhir
+    if len(rows) >= 2:
+        latest = rows[0]
+        prev   = rows[1]
+
+        hs_now  = latest["health_score"] or 0
+        hs_prev = prev["health_score"] or 0
+        diff    = hs_now - hs_prev
+
+        st.markdown("#### Perubahan dari Analisis Sebelumnya:")
+        col1, col2, col3 = st.columns(3)
+
+        income_change = (
+            (latest["total_income"] or 0) - (prev["total_income"] or 0)
+        )
+        expense_change = (
+            (latest["total_expense"] or 0) - (prev["total_expense"] or 0)
+        )
+
+        with col1:
+            st.metric(
+                "Pemasukan",
+                f"Rp {(latest['total_income'] or 0):,.0f}",
+                delta=f"Rp {income_change:,.0f}",
+                delta_color="normal"
+            )
+        with col2:
+            st.metric(
+                "Pengeluaran",
+                f"Rp {(latest['total_expense'] or 0):,.0f}",
+                delta=f"Rp {expense_change:,.0f}",
+                delta_color="inverse"
+            )
+        with col3:
+            st.metric(
+                "Skor Kesehatan",
+                f"{hs_now:.0f}/100",
+                delta=f"{diff:+.0f} poin",
+                delta_color="normal"
+            )
+
+        # Narasi perubahan
+        if diff > 5:
+            msg = (f"📈 Kondisi keuangan membaik {diff:.0f} poin "
+                   f"dari analisis sebelumnya. Pertahankan!")
+            st.success(msg)
+        elif diff < -5:
+            msg = (f"📉 Kondisi keuangan memburuk {abs(diff):.0f} poin "
+                   f"dari analisis sebelumnya. Perlu perhatian segera.")
+            st.warning(msg)
+        else:
+            st.info("➡️ Kondisi keuangan relatif stabil dari analisis sebelumnya.")
+
+
+# ══════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════
 
@@ -861,23 +1160,16 @@ def main():
         st.divider()
         render_results(result)
     else:
-        # Welcome screen
-        st.markdown("""
-        ### 👋 Selamat datang di CFO Sentinel!
-
-        CFO Sentinel adalah sistem AI yang membantu UMKM Indonesia mengelola keuangan bisnis:
-
-        | Fitur | Deskripsi |
-        |-------|-----------|
-        | 📝 **Input Bebas** | Ceritakan transaksi dalam Bahasa Indonesia sehari-hari |
-        | 📊 **Health Score** | Nilai kesehatan keuangan 0–100 dengan 3 benchmark |
-        | ⚠️ **Early Warning** | Deteksi ancaman kas sebelum terjadi krisis |
-        | 🎯 **Simulasi** | *What-if* jika penjualan turun atau biaya naik |
-        | 💡 **Rekomendasi** | Action items konkret dengan estimasi dampak |
-        | 💬 **Tanya CFO** | Tanya langsung dalam Bahasa Indonesia |
-
-        **Mulai:** Masukkan transaksi di kotak di atas, atau aktifkan **Demo Mode** untuk melihat contoh analisis.
-        """)
+        # Show Cara Pakai tab as default before analysis
+        st.divider()
+        tab_names = [
+            "📖 Cara Pakai", "❓ Panduan Bertanya",
+        ]
+        tabs = st.tabs(tab_names)
+        with tabs[0]:
+            render_how_to_use()
+        with tabs[1]:
+            render_question_guide()
 
 
 if __name__ == "__main__":
