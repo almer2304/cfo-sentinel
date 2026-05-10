@@ -53,6 +53,8 @@ def _init_session():
         st.session_state.pipeline_result = None
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
+    if "quick_question" not in st.session_state:
+        st.session_state.quick_question = ""
     if "is_demo" not in st.session_state:
         st.session_state.is_demo = os.getenv("DEMO_MODE", "false").lower() == "true"
 
@@ -180,6 +182,7 @@ def _run_live_pipeline(raw_input: str, config: dict):
 def render_results(state: PipelineState):
     """Render seluruh hasil analisis."""
     tabs = st.tabs([
+        "📖 Cara Pakai",
         "📊 Overview",
         "⚠️ Anomali",
         "🎯 Skenario",
@@ -187,15 +190,18 @@ def render_results(state: PipelineState):
         "📈 Forecast",
         "🤖 Reasoning Log",
         "💬 Tanya CFO",
+        "💬 Panduan Bertanya",
     ])
 
-    with tabs[0]: render_overview(state)
-    with tabs[1]: render_anomalies(state)
-    with tabs[2]: render_scenario(state)
-    with tabs[3]: render_recommendations(state)
-    with tabs[4]: render_forecast(state)
-    with tabs[5]: render_agent_logs(state)
-    with tabs[6]: render_chat(state)
+    with tabs[0]: render_how_to_use()
+    with tabs[1]: render_overview(state)
+    with tabs[2]: render_anomalies(state)
+    with tabs[3]: render_scenario(state)
+    with tabs[4]: render_recommendations(state)
+    with tabs[5]: render_forecast(state)
+    with tabs[6]: render_agent_logs(state)
+    with tabs[7]: render_chat(state)
+    with tabs[8]: render_question_guide()
 
 
 def render_overview(state: PipelineState):
@@ -529,7 +535,14 @@ def render_agent_logs(state: PipelineState):
 def render_chat(state: PipelineState):
     """Tab 7: Conversational interface."""
     st.subheader("💬 Tanya CFO Sentinel")
-    st.caption("Tanya langsung tentang kondisi keuangan bisnis Anda dalam Bahasa Indonesia.")
+    st.caption("Tanya langsung tentang kondisi keuangan bisnis kamu dalam Bahasa Indonesia.")
+
+    # Load quick question dari Panduan Bertanya
+    if "quick_question" in st.session_state and st.session_state["quick_question"]:
+        default_question = st.session_state["quick_question"]
+        st.session_state["quick_question"] = ""  # reset setelah dibaca
+    else:
+        default_question = ""
 
     # Demo Q&A quick buttons
     if state.is_demo_mode:
@@ -552,8 +565,14 @@ def render_chat(state: PipelineState):
             st.write(msg["content"])
 
     # Input box
-    user_q = st.chat_input("Tanyakan sesuatu tentang keuangan bisnis Anda...")
-    if user_q:
+    user_q = st.text_input(
+        "Tanya langsung tentang kondisi keuangan kamu:",
+        value=default_question,
+        placeholder="Contoh: Sampai kapan uang aku bisa bertahan?",
+        key="chat_input"
+    )
+    send_clicked = st.button("📨 Kirim Pertanyaan", type="primary", use_container_width=True)
+    if send_clicked and user_q:
         st.session_state.chat_history.append({"role": "user", "content": user_q})
 
         if state.analyst_output and state.anomaly_output and state.advisor_output:
@@ -576,6 +595,249 @@ def render_chat(state: PipelineState):
 
         st.session_state.chat_history.append({"role": "assistant", "content": answer})
         st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════
+# TAB: CARA PAKAI (ONBOARDING)
+# ══════════════════════════════════════════════════════════════════
+
+def render_how_to_use():
+    st.markdown("# 📖 Cara Pakai CFO Sentinel")
+    st.markdown(
+        "**CFO Sentinel** adalah asisten keuangan AI untuk bisnis kamu. "
+        "Cukup ceritakan transaksi harian kamu, dan sistem akan "
+        "langsung menganalisis kondisi keuangan bisnis kamu secara otomatis."
+    )
+
+    st.markdown("---")
+
+    # Step by step
+    steps = [
+        {
+            "num": "1",
+            "icon": "📝",
+            "title": "Ceritakan Transaksi Kamu",
+            "desc": (
+                "Di kotak **Input Transaksi** (halaman utama), "
+                "ceritakan semua transaksi bisnis kamu hari ini "
+                "atau minggu ini. Tidak perlu format khusus — "
+                "tulis saja seperti bicara biasa."
+            ),
+            "contoh": (
+                "**Contoh:**\n"
+                "> Senin beli bahan baku 500rb, bayar listrik 200rb, "
+                "terima bayaran dari pelanggan 1.5jt, "
+                "bayar gaji karyawan 1jt"
+            ),
+            "tips": "💡 Makin lengkap cerita kamu, makin akurat analisisnya",
+        },
+        {
+            "num": "2",
+            "icon": "⚙️",
+            "title": "Isi Informasi Bisnis",
+            "desc": (
+                "Di sidebar kiri, pilih **Jenis Bisnis** kamu "
+                "(kuliner, fashion, jasa, atau retail) dan isi "
+                "**Saldo Kas saat ini** — berapa uang yang kamu "
+                "punya sekarang (di dompet, rekening, atau laci kasir)."
+            ),
+            "contoh": (
+                "**Contoh:**\n"
+                "> Jenis Bisnis: Kuliner\n"
+                "> Saldo Kas: 5.000.000"
+            ),
+            "tips": "💡 Saldo kas yang akurat = hasil analisis yang akurat",
+        },
+        {
+            "num": "3",
+            "icon": "🚀",
+            "title": "Klik Tombol Analisis",
+            "desc": (
+                "Klik tombol **Analisis** (tombol merah di kanan). "
+                "Tunggu beberapa detik — 6 AI agent akan bekerja "
+                "bersama untuk menganalisis kondisi keuangan kamu."
+            ),
+            "contoh": None,
+            "tips": "💡 Proses biasanya selesai dalam 10-30 detik",
+        },
+        {
+            "num": "4",
+            "icon": "📊",
+            "title": "Baca Hasil Analisis",
+            "desc": (
+                "Hasil analisis muncul di beberapa tab:\n\n"
+                "- **Overview** — Kondisi umum dan peringatan darurat\n"
+                "- **Anomali** — Pengeluaran yang tidak biasa\n"
+                "- **Skenario** — Simulasi 'bagaimana jika...'\n"
+                "- **Rekomendasi** — Langkah yang harus dilakukan\n"
+                "- **Forecast** — Proyeksi keuangan 30 hari ke depan\n"
+                "- **Reasoning Log** — Cara AI berpikir (untuk yang penasaran)"
+            ),
+            "contoh": None,
+            "tips": "💡 Mulai dari tab Overview — di situ ada peringatan paling penting",
+        },
+        {
+            "num": "5",
+            "icon": "💬",
+            "title": "Tanya Langsung ke CFO Sentinel",
+            "desc": (
+                "Punya pertanyaan spesifik? Klik tab **Tanya CFO** "
+                "dan tanya langsung dalam bahasa Indonesia sehari-hari. "
+                "Tidak tahu mau tanya apa? Cek tab **Panduan Bertanya** "
+                "untuk template pertanyaan yang sudah disiapkan."
+            ),
+            "contoh": (
+                "**Contoh pertanyaan:**\n"
+                "> Sampai kapan uang aku bisa bertahan?\n"
+                "> Pengeluaran apa yang paling boros?\n"
+                "> Apa yang harus aku lakukan minggu ini?"
+            ),
+            "tips": "💡 Tanya seperti kamu bicara ke teman yang paham keuangan",
+        },
+    ]
+
+    for step in steps:
+        with st.container():
+            col1, col2 = st.columns([1, 11])
+            with col1:
+                st.markdown(
+                    f"<div style='background:#dc2626;color:white;"
+                    f"border-radius:50%;width:36px;height:36px;"
+                    f"display:flex;align-items:center;justify-content:center;"
+                    f"font-weight:bold;font-size:18px;margin-top:8px'>"
+                    f"{step['num']}</div>",
+                    unsafe_allow_html=True
+                )
+            with col2:
+                st.markdown(f"### {step['icon']} {step['title']}")
+                st.markdown(step["desc"])
+                if step["contoh"]:
+                    st.markdown(step["contoh"])
+                st.caption(step["tips"])
+            st.markdown("---")
+
+    # FAQ Section
+    st.markdown("## ❓ Pertanyaan yang Sering Ditanya")
+
+    faqs = [
+        (
+            "Apakah data keuangan saya aman?",
+            "Ya. Semua data tersimpan di database lokal sistem ini "
+            "dan tidak dikirim ke pihak ketiga. "
+            "AI hanya memproses teks yang kamu masukkan untuk menganalisis."
+        ),
+        (
+            "Harus seberapa detail transaksi yang saya masukkan?",
+            "Semakin detail semakin baik, tapi tidak harus sempurna. "
+            "Kalau kamu lupa beberapa transaksi kecil, tidak apa-apa. "
+            "Yang penting transaksi besar (sewa, gaji, pemasukan utama) tercatat."
+        ),
+        (
+            "Apakah saya harus input setiap hari?",
+            "Tidak wajib. Kamu bisa input seminggu sekali atau bahkan "
+            "bulanan. Makin sering input, makin akurat analisisnya. "
+            "Idealnya 2-3 kali seminggu."
+        ),
+        (
+            "Apa itu 'Health Score'?",
+            "Health Score adalah nilai kesehatan keuangan bisnis kamu "
+            "dari 0-100. Di atas 65 = Aman (hijau), 50-65 = Hati-hati "
+            "(kuning), di bawah 50 = Bahaya (merah). "
+            "Seperti rapor kesehatan untuk bisnis kamu."
+        ),
+        (
+            "Apakah rekomendasi AI selalu benar?",
+            "AI memberikan analisis berdasarkan data yang kamu masukkan. "
+            "Semakin akurat data kamu, semakin tepat rekomendasinya. "
+            "Selalu pertimbangkan kondisi spesifik bisnis kamu "
+            "sebelum mengambil keputusan besar."
+        ),
+    ]
+
+    for question, answer in faqs:
+        with st.expander(f"❓ {question}"):
+            st.markdown(answer)
+
+    st.markdown("---")
+    st.success(
+        "✅ **Sudah siap?** Pergi ke halaman utama (tab Overview) "
+        "dan mulai masukkan transaksi pertama kamu!"
+    )
+
+
+# ══════════════════════════════════════════════════════════════════
+# TAB: PANDUAN BERTANYA
+# ══════════════════════════════════════════════════════════════════
+
+def render_question_guide():
+    st.markdown("## 💬 Panduan Bertanya ke CFO Sentinel")
+    st.markdown(
+        "Tidak tahu mau tanya apa? Pilih salah satu pertanyaan "
+        "di bawah — klik langsung untuk mengirim ke CFO Sentinel!"
+    )
+
+    # Kategori pertanyaan siap pakai
+    categories = {
+        "💰 Soal Uang & Kas": [
+            "Berapa uang yang masih aku punya sekarang?",
+            "Sampai kapan uang ini bisa bertahan?",
+            "Berapa banyak uang yang habis setiap harinya?",
+            "Apakah pemasukan aku sudah cukup untuk nutup pengeluaran?",
+            "Kapan aku akan kehabisan uang kalau tidak ada perubahan?",
+        ],
+        "⚠️ Soal Masalah & Bahaya": [
+            "Apa masalah terbesar yang harus aku selesaikan sekarang?",
+            "Pengeluaran apa yang paling boros bulan ini?",
+            "Kenapa kondisi keuangan aku menurun?",
+            "Apa yang harus aku lakukan dalam 7 hari ke depan?",
+            "Apakah bisnis aku dalam bahaya?",
+        ],
+        "📈 Soal Pertumbuhan": [
+            "Bagaimana cara meningkatkan keuntungan aku?",
+            "Pengeluaran mana yang bisa aku kurangi tanpa merusak bisnis?",
+            "Kalau penjualan aku naik 20%, apa yang berubah?",
+            "Kapan aku bisa mulai bayar gaji karyawan tambahan?",
+            "Apakah aku sudah bisa beli peralatan baru sekarang?",
+        ],
+        "🤔 Soal Perbandingan": [
+            "Apakah pengeluaran aku normal untuk bisnis kuliner?",
+            "Dibanding bulan lalu, kondisi aku lebih baik atau buruk?",
+            "Berapa seharusnya aku spend untuk bahan baku?",
+            "Apakah gaji karyawan aku sudah sesuai dengan pendapatan?",
+        ],
+        "🆘 Situasi Darurat": [
+            "Uang aku hampir habis, apa yang harus aku lakukan?",
+            "Aku tidak bisa bayar supplier minggu ini, gimana?",
+            "Pengeluaran bulan ini jauh lebih besar dari biasanya, kenapa?",
+            "Penjualan aku turun drastis bulan ini, apa yang salah?",
+        ],
+    }
+
+    for category, questions in categories.items():
+        st.markdown(f"### {category}")
+        cols = st.columns(2)
+        for i, question in enumerate(questions):
+            col = cols[i % 2]
+            with col:
+                if st.button(
+                    question,
+                    key=f"q_{category}_{i}",
+                    use_container_width=True,
+                ):
+                    # Set pertanyaan ke session state
+                    # Tab Tanya CFO akan membaca ini
+                    st.session_state["quick_question"] = question
+                    st.success(
+                        f"✅ Pertanyaan dipilih! "
+                        f"Pergi ke tab 'Tanya CFO' untuk melihat jawabannya."
+                    )
+        st.markdown("---")
+
+    st.info(
+        "💡 **Tips:** Setelah klik pertanyaan di atas, "
+        "buka tab **Tanya CFO** dan klik tombol kirim. "
+        "Pertanyaan akan otomatis terisi!"
+    )
 
 
 # ══════════════════════════════════════════════════════════════════
