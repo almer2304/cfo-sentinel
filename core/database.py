@@ -220,6 +220,18 @@ def init_database():
         )
     """)
 
+    # ── TABEL 10: CHAT MESSAGES ────────────────────────────────────
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER NOT NULL,
+            session_key  TEXT NOT NULL,
+            role         TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+            content      TEXT NOT NULL,
+            created_at   TEXT DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -808,6 +820,67 @@ def save_monthly_snapshot(snapshot: dict, user_id: int = None):
     conn.commit()
     conn.close()
 
+
+# ══════════════════════════════════════════════════════════════════
+# HELPER FUNCTIONS — Chat
+# ══════════════════════════════════════════════════════════════════
+
+def save_chat_message(user_id: int, session_key: str, 
+                      role: str, content: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO chat_messages (user_id, session_key, role, content)
+        VALUES (?, ?, ?, ?)
+    """, (user_id, session_key, role, content))
+    conn.commit()
+    conn.close()
+
+def get_chat_history(user_id: int, session_key: str, 
+                     limit: int = 20) -> list[dict]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT role, content, created_at
+        FROM chat_messages
+        WHERE user_id = ? AND session_key = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+    """, (user_id, session_key, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    # Balik urutan (terbaru di bawah)
+    return [dict(r) for r in reversed(rows)]
+
+def get_chat_sessions(user_id: int) -> list[dict]:
+    """Ambil semua sesi chat user."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT 
+            session_key,
+            MIN(created_at) as started_at,
+            MAX(created_at) as last_message,
+            COUNT(*) as message_count
+        FROM chat_messages
+        WHERE user_id = ?
+        GROUP BY session_key
+        ORDER BY last_message DESC
+        LIMIT 10
+    """, (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def delete_chat_session(user_id: int, session_key: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        DELETE FROM chat_messages
+        WHERE user_id = ? AND session_key = ?
+    """, (user_id, session_key))
+    conn.commit()
+    conn.close()
 
 # ══════════════════════════════════════════════════════════════════
 # ENTRY POINT — Test database

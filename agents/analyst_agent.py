@@ -22,7 +22,7 @@ from core.schemas import (
     ForecastPoint,
 )
 from core.memory import get_industry_health_avg, get_monthly_snapshots
-
+from core.database import get_transactions
 
 def _safe_get(obj, key, default=None):
     if hasattr(obj, key):
@@ -42,28 +42,6 @@ def _compute_health_score(
 ) -> float:
     """
     Hitung Financial Health Score (0–100) dari 4 komponen:
-
-    1. Cash Runway Score (0–35):
-       Runway  0 hari → 0 poin
-       Runway 30 hari → 20 poin
-       Runway 60 hari → 35 poin (max)
-
-    2. Profitability Score (0–30):
-       Gross margin ≤ 0%   → 0 poin
-       Gross margin = 20%  → 20 poin
-       Gross margin ≥ 30%  → 30 poin (max)
-
-    3. Cash Flow Score (0–25):
-       Net cashflow positif → 25 poin
-       Net cashflow negatif → 0 poin (penalti penuh)
-
-    4. Consistency Score (0–10):
-       Revenue consistency 0.0–1.0 → 0–10 poin
-
-    Total: 0–100, di mana:
-    < 50  → DANGER
-    50–65 → WARNING
-    > 65  → SAFE
     """
     # Komponen 1: Runway
     runway_score = min(35, (runway_days / 60) * 35)
@@ -107,6 +85,7 @@ def run_analyst_agent(
     categorizer_output: CategorizerOutput,
     current_cash_balance: float,
     business_type: str = "general",
+    user_id: int = None,
 ) -> AnalystOutput:
 
     total_income  = categorizer_output.total_income
@@ -116,7 +95,22 @@ def run_analyst_agent(
     today          = datetime.now()
     period_start   = today.replace(day=1).strftime("%Y-%m-%d")
     period_end     = today.strftime("%Y-%m-%d")
-    days_in_period = max(today.day, 1)
+    
+    # Fetch cumulative monthly transactions for accurate burn rate
+    if user_id:
+        monthly_txs = get_transactions(
+            start_date=period_start,
+            end_date=period_end,
+            business_only=True,
+            user_id=user_id
+        )
+    else:
+        monthly_txs = categorizer_output.transactions
+
+    monthly_expense = sum(_safe_get(t, "amount", 0) for t in monthly_txs if _safe_get(t, "type") == "expense")
+    
+    tx_dates = set(_safe_get(t, "date", "") for t in monthly_txs if _safe_get(t, "type") == "expense")
+    active_days = max(len(tx_dates), 1)
 
     # ── Pisahkan transaksi berdasarkan jenis akuntansi SAK-ETAP ──
     # Asset purchase categories (not actual expenses that reduce profit)
@@ -146,19 +140,27 @@ def run_analyst_agent(
     )
 
     # ── Metrik dasar ─────────────────────────────────────────────
-    burn_rate_daily   = total_expense / days_in_period
+    burn_rate_daily   = monthly_expense / active_days
     burn_rate_monthly = burn_rate_daily * 30
 
     # Saldo: saldo awal + net cashflow periode ini
     cash_balance = current_cash_balance + net_cashflow
 
     # Runway: berapa hari saldo bisa bertahan dengan burn rate saat ini
-    if burn_rate_daily > 0 and cash_balance > 0:
-        expected_runway = cash_balance / burn_rate_daily
+    # Asumsi UMKM: Pengeluaran operasional harian minimal Rp 50.000 
+    # (untuk mencegah runway tidak masuk akal spt 400 hari jika user baru mencatat Rp 5.000)
+    ASSUMED_MIN_DAILY_BURN = 50000.0
+    adjusted_burn_rate = max(burn_rate_daily, ASSUMED_MIN_DAILY_BURN)
+
+    if adjusted_burn_rate > 0 and cash_balance > 0:
+        expected_runway = cash_balance / adjusted_burn_rate
     elif cash_balance <= 0:
         expected_runway = 0  # sudah defisit
     else:
         expected_runway = 999  # tidak ada pengeluaran
+        
+    # UMKM sangat dinamis, runway di atas 180 hari (6 bulan) tidak realistis
+    expected_runway = min(expected_runway, 180)
 
     # Confidence range runway: ±20% dari expected
     min_runway = max(0, expected_runway * 0.8)

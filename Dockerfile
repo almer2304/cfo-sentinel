@@ -40,22 +40,19 @@ COPY . .
 # ── Buat direktori data (untuk SQLite) ───────────────────────────
 RUN mkdir -p /app/data
 
-# ── Expose port Streamlit ─────────────────────────────────────────
-EXPOSE 8501
+# ── Expose ports ──────────────────────────────────────────────────
+# 8000 = FastAPI backend (primary)
+# 8501 = Streamlit dashboard (admin/backup)
+EXPOSE 8000 8501
 
 # ── Health check ──────────────────────────────────────────────────
-# Docker akan cek apakah Streamlit masih jalan setiap 30 detik
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8501/_stcore/health || exit 1
+# Default: cek FastAPI. docker-compose bisa override per service.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # ── Entrypoint ────────────────────────────────────────────────────
-# --server.address=0.0.0.0  → bisa diakses dari luar container
-# --server.port=8501         → port yang di-expose
-# --server.headless=true     → tidak buka browser otomatis
-# --server.fileWatcherType=none → matikan file watcher (lebih stabil di prod)
-CMD ["streamlit", "run", "dashboard/app.py", \
-     "--server.address=0.0.0.0", \
-     "--server.port=8501", \
-     "--server.headless=true", \
-     "--server.fileWatcherType=none", \
-     "--browser.gatherUsageStats=false"]
+# Default: jalankan FastAPI backend.
+# docker-compose override CMD per service:
+#   cfo-api       → uvicorn api.main:app (default ini)
+#   cfo-dashboard → streamlit run dashboard/app.py
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

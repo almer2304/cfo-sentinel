@@ -1,70 +1,65 @@
 # ══════════════════════════════════════════════════════════════════
-# CFO Sentinel — Docker Compose
-# Jalankan dengan: docker-compose up --build
+# CFO Sentinel — Docker Compose (Production)
+# Menjalankan: FastAPI backend + Streamlit admin dashboard
+# React frontend di-serve terpisah via Nginx
 # ══════════════════════════════════════════════════════════════════
 
 version: "3.9"
 
 services:
 
-  cfo-sentinel:
+  # ── Backend API (FastAPI) ──────────────────────────────────────
+  cfo-api:
     build:
       context: .
       dockerfile: Dockerfile
-
-    container_name: cfo-sentinel
-
-    # ── Port mapping ──────────────────────────────────────────────
-    # HOST:CONTAINER
-    # Akses via: http://localhost:8501 (lokal)
-    # atau http://IP_VPS:8501 (dari internet)
+    container_name: cfo-sentinel-api
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 2
     ports:
-      - "8501:8501"
-
-    # ── Environment variables ─────────────────────────────────────
-    # Baca dari file .env di root project
-    # JANGAN hardcode API key di sini
+      - "8000:8000"
     env_file:
       - .env
-
-    # ── Volumes ───────────────────────────────────────────────────
-    # Persist SQLite database di luar container
-    # Jika container di-restart, data tidak hilang
     volumes:
       - cfo_data:/app/data
-
-    # ── Restart policy ────────────────────────────────────────────
-    # unless-stopped: restart otomatis kecuali di-stop manual
-    # Berguna di VPS agar sistem tetap jalan setelah reboot
     restart: unless-stopped
-
-    # ── Resource limits ───────────────────────────────────────────
-    # Sesuai VPS Sumopod plan Rp 90.000 (4 GB RAM, 2 vCPU)
-    deploy:
-      resources:
-        limits:
-          cpus: "1.5"
-          memory: "2G"
-        reservations:
-          cpus: "0.5"
-          memory: "512M"
-
-    # ── Logging ───────────────────────────────────────────────────
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
 
-    # ── Health check ──────────────────────────────────────────────
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+  # ── Streamlit Dashboard (Admin/Backup) ────────────────────────
+  cfo-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cfo-sentinel-dashboard
+    command: >
+      streamlit run dashboard/app.py
+      --server.address=0.0.0.0
+      --server.port=8501
+      --server.headless=true
+      --server.fileWatcherType=none
+      --browser.gatherUsageStats=false
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - cfo_data:/app/data
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
 
-# ── Named volumes ─────────────────────────────────────────────────
 volumes:
   cfo_data:
     driver: local

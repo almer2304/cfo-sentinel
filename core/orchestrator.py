@@ -199,10 +199,12 @@ def node_analyst(state: dict) -> dict:
     start = datetime.now()
 
     try:
+        user_id = _get(state, "user_id")
         output = run_analyst_agent(
             categorizer_output=categorizer_output,
             current_cash_balance=current_cash_balance,
             business_type=business_type,
+            user_id=user_id,
         )
 
         log_agent_step(
