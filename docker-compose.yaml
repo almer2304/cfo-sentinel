@@ -1,14 +1,5 @@
-# ══════════════════════════════════════════════════════════════════
-# CFO Sentinel — Docker Compose (Production)
-# Menjalankan: FastAPI backend + Streamlit admin dashboard
-# React frontend di-serve terpisah via Nginx
-# ══════════════════════════════════════════════════════════════════
-
-version: "3.9"
-
 services:
 
-  # ── Backend API (FastAPI) ──────────────────────────────────────
   cfo-api:
     build:
       context: .
@@ -28,13 +19,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 
-  # ── Streamlit Dashboard (Admin/Backup) ────────────────────────
   cfo-dashboard:
     build:
       context: .
@@ -54,11 +39,6 @@ services:
     volumes:
       - cfo_data:/app/data
     restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "5m"
-        max-file: "2"
 
 volumes:
   cfo_data:
