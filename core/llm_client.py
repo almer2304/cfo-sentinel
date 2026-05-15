@@ -59,25 +59,28 @@ _client = None
 
 
 def _get_client(force_reload=False):
-    """Get or create Groq Client with API key."""
+    """Get or create API Client with API key."""
     global _client
 
     if _client is not None and not force_reload:
         return _client
 
-    # pyrefly: ignore [missing-import]
-    from groq import Groq
-
     load_dotenv(override=True)
+    provider = os.getenv("LLM_PROVIDER", "sumopod")
 
-    api_key = os.getenv("GROQ_API_KEY", "")
-    if not api_key:
-        raise ValueError(
-            "API key tidak ditemukan. "
-            "Set GROQ_API_KEY di .env"
-        )
+    if provider == "groq":
+        from groq import Groq
+        api_key = os.getenv("GROQ_API_KEY", "")
+        if not api_key:
+            raise ValueError("API key tidak ditemukan. Set GROQ_API_KEY di .env")
+        _client = Groq(api_key=api_key)
+    else:
+        from openai import OpenAI
+        api_key = os.getenv("SUMOPOD_API_KEY", "")
+        if not api_key:
+            raise ValueError("API key tidak ditemukan. Set SUMOPOD_API_KEY di .env")
+        _client = OpenAI(api_key=api_key, base_url="https://ai.sumopod.com/v1")
 
-    _client = Groq(api_key=api_key)
     return _client
 
 
@@ -220,10 +223,30 @@ def _get_fallback_response(agent_name: str, user_message: str) -> str:
             "recurring_count": 0,
             "note": "Kategorisasi tidak tersedia saat ini.",
         }),
-        "analyst": (
-            "Analisis otomatis tidak tersedia. "
-            "Sistem berjalan dalam mode terbatas."
-        ),
+        "analyst": json.dumps({
+            "total_income": 0,
+            "total_expense": 0,
+            "net_cashflow": 0,
+            "cash_balance": 0,
+            "burn_rate_daily": 0,
+            "burn_rate_monthly": 0,
+            "gross_margin": 0,
+            "runway_days": {"minimum": 0, "expected": 0, "maximum": 0, "assumption": "Fallback"},
+            "revenue_consistency": "Unknown",
+            "health_score": {
+                "current": 50,
+                "previous_month": 50,
+                "industry_average": 50,
+                "danger_threshold": 20,
+                "status": "SAFE",
+                "trend": "STABLE"
+            },
+            "narrative": "Analisis otomatis tidak tersedia. Sistem berjalan dalam mode terbatas.",
+            "period_start": "2023-01-01",
+            "period_end": "2023-01-31",
+            "business_type": "general",
+            "forecast_30d": []
+        }),
         "anomaly": json.dumps({
             "anomalies": [],
             "analyst_output_valid": True,
