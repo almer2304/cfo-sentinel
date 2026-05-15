@@ -107,7 +107,7 @@ class CategorizedTransaction(BaseModel):
     is_business:                bool  = True
     confidence:                 float = 1.0
     category:                   str
-    sub_category:               str
+    sub_category:               Optional[str] = None
     is_recurring:               bool  = False
     categorization_confidence:  float = Field(default=1.0, ge=0.0, le=1.0)
     is_cogs:                    bool  = Field(default=False,

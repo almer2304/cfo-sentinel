@@ -22,32 +22,32 @@ AGENT_CONFIG = {
     "parser": {
         "model": os.getenv("MODEL_PARSER", "llama-3.3-70b-versatile"),
         "temperature": 0.1,
-        "max_tokens": 2000,
+        "max_tokens": 4000,
     },
     "categorizer": {
         "model": os.getenv("MODEL_CATEGORIZER", "llama-3.3-70b-versatile"),
         "temperature": 0.1,
-        "max_tokens": 2000,
+        "max_tokens": 4000,
     },
     "analyst": {
         "model": os.getenv("MODEL_ANALYST", "llama-3.3-70b-versatile"),
         "temperature": 0.1,
-        "max_tokens": 1500,
+        "max_tokens": 4000,
     },
     "anomaly": {
         "model": os.getenv("MODEL_ANOMALY", "llama-3.3-70b-versatile"),
         "temperature": 0.2,
-        "max_tokens": 1500,
+        "max_tokens": 4000,
     },
     "scenario": {
         "model": os.getenv("MODEL_SCENARIO", "llama-3.3-70b-versatile"),
         "temperature": 0.3,
-        "max_tokens": 2000,
+        "max_tokens": 4000,
     },
     "advisor": {
         "model": os.getenv("MODEL_ADVISOR", "llama-3.3-70b-versatile"),
         "temperature": 0.3,
-        "max_tokens": 2000,
+        "max_tokens": 4000,
     },
 }
 
@@ -198,9 +198,31 @@ def call_llm_json(
         return parsed, metadata
 
     except json.JSONDecodeError as e:
-        print(f"[{agent_name}] JSON parse error: {e}")
-        print(f"   Raw response: {raw[:200]}...")
-        return {}, metadata
+        # Simple auto-repair for truncated JSON
+        try:
+            fixed_cleaned = cleaned
+            # Count unescaped quotes
+            quote_count = fixed_cleaned.count('"') - fixed_cleaned.count('\\"')
+            if quote_count % 2 != 0:
+                fixed_cleaned += '"'
+            
+            # Close arrays and objects
+            open_braces = fixed_cleaned.count('{') - fixed_cleaned.count('}')
+            open_brackets = fixed_cleaned.count('[') - fixed_cleaned.count(']')
+            
+            # Naive approach: close brackets then braces
+            if open_brackets > 0:
+                fixed_cleaned += ']' * open_brackets
+            if open_braces > 0:
+                fixed_cleaned += '}' * open_braces
+                
+            parsed = json.loads(fixed_cleaned)
+            print(f"[{agent_name}] JSON auto-repaired successfully!")
+            return parsed, metadata
+        except json.JSONDecodeError:
+            print(f"[{agent_name}] JSON parse error: {e}")
+            print(f"   Raw response: {raw[:200]}...")
+            return {}, metadata
 
 
 def _get_fallback_response(agent_name: str, user_message: str) -> str:
