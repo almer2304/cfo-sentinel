@@ -34,33 +34,68 @@ class ChatHistoryResponse(BaseModel):
 
 
 def _build_financial_context(user_id: int) -> str:
+    """
+    Ambil konteks keuangan dari daily_summaries (hasil pipeline otomatis).
+    Fallback ke analytics lama jika belum ada data pipeline.
+    """
+    from core.database_new import get_daily_summary, get_cash_balance
+    from datetime import datetime, timezone, timedelta
+
+    WIB = timezone(timedelta(hours=7))
+    today = datetime.now(WIB).strftime('%Y-%m-%d')
+
+    # Coba dari daily_summaries (pipeline baru)
+    summary = get_daily_summary(user_id, today)
+    if not summary:
+        # Fallback: ambil summary terakhir
+        summary = get_daily_summary(user_id)
+
+    if summary:
+        cash_balance = get_cash_balance(user_id)
+        score = summary.get('health_score', 0)
+        status = "BAHAYA" if score < 40 else ("WASPADA" if score < 65 else "AMAN")
+        return f"""
+Data keuangan bisnis terkini (diperbarui otomatis):
+- Skor Kesehatan: {score:.0f}/100 ({status})
+- Total Pemasukan Bulan Ini: Rp {summary.get('total_income', 0):,.0f}
+- Total Pengeluaran Bulan Ini: Rp {summary.get('total_expense', 0):,.0f}
+- Arus Kas Bersih: Rp {summary.get('net_cashflow', 0):,.0f}
+- Saldo Kas Saat Ini: Rp {cash_balance:,.0f}
+- Uang Habis per Hari: Rp {summary.get('burn_rate_daily', 0):,.0f}
+- Perkiraan Uang Bertahan: {summary.get('runway_days', 0):.0f} hari
+- Jumlah Anomali: {summary.get('anomaly_count', 0)}
+- Analisis AI: {summary.get('agent_narrative', '-')}
+- Terakhir diperbarui: {summary.get('processed_at', '-')}
+"""
+
+    # Fallback lama ke analytics
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM analytics
-        WHERE user_id = ?
-        ORDER BY created_at DESC
-        LIMIT 1
-    """, (user_id,))
-    row = cursor.fetchone()
-    conn.close()
+    try:
+        cursor.execute("""
+            SELECT * FROM analytics
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (user_id,))
+        row = cursor.fetchone()
+    except Exception:
+        row = None
+    finally:
+        conn.close()
 
     if not row:
-        return "Pengguna baru — belum ada data analisis keuangan."
+        return "Pengguna baru — belum ada data keuangan. Silakan catat transaksi pertama Anda."
 
     row = dict(row)
     return f"""
-Data keuangan bisnis terkini (dari analisis terakhir):
+Data keuangan bisnis (dari analisis sebelumnya):
 - Skor Kesehatan: {row.get('health_score', 0):.0f}/100
 - Total Pemasukan: Rp {row.get('total_income', 0):,.0f}
 - Total Pengeluaran: Rp {row.get('total_expense', 0):,.0f}
-- Sisa Uang Bersih: Rp {row.get('net_cashflow', 0):,.0f}
 - Saldo Kas: Rp {row.get('cash_balance', 0):,.0f}
 - Uang Habis per Hari: Rp {row.get('burn_rate_daily', 0):,.0f}
 - Perkiraan Uang Bertahan: {row.get('runway_days', 0):.0f} hari
-- Keuntungan per Penjualan: {row.get('gross_margin', 0):.1f}%
-- Periode analisis: {row.get('period_start', '')} s/d {row.get('period_end', '')}
-- Jenis bisnis: {row.get('business_type', 'umum')}
 """
 
 
