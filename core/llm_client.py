@@ -15,31 +15,34 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Konfigurasi per agent ──────────────────────────────────────────
+# max_tokens dinaikkan untuk mencegah JSON terpotong di tengah response.
+# Model qwen3 punya thinking mode yang makan banyak token sebelum JSON,
+# sehingga kita butuh ruang lebih besar untuk konten aktual.
 AGENT_CONFIG = {
     "classifier": {
-        "model": os.getenv("MODEL_CLASSIFIER", "qwen/qwen3-6b-plus"),
+        "model": os.getenv("MODEL_CLASSIFIER", "qwen3.6-flash"),
         "temperature": 0.1,   # deterministic — klasifikasi akuntansi
-        "max_tokens": 2000,
+        "max_tokens": 8000,   # dinaikkan: qwen3 butuh token untuk think + JSON
     },
     "health": {
-        "model": os.getenv("MODEL_HEALTH", "qwen/qwen3-6b-plus"),
+        "model": os.getenv("MODEL_HEALTH", "qwen3.6-plus"),
         "temperature": 0.1,   # deterministic — kalkulasi metrik
-        "max_tokens": 2000,
+        "max_tokens": 4000,   # dinaikkan: narasi + think block
     },
     "anomaly": {
-        "model": os.getenv("MODEL_ANOMALY", "qwen/qwen3-6b-plus"),
+        "model": os.getenv("MODEL_ANOMALY", "qwen3.6-flash"),
         "temperature": 0.2,   # sedikit kreatif untuk deteksi pola
-        "max_tokens": 2000,
+        "max_tokens": 8000,   # dinaikkan: JSON anomali bisa panjang + think block
     },
     "advisory": {
-        "model": os.getenv("MODEL_ADVISORY", "qwen/qwen3-6b-plus"),
+        "model": os.getenv("MODEL_ADVISORY", "qwen3.6-plus"),
         "temperature": 0.3,   # lebih ekspresif untuk chat
-        "max_tokens": 1500,
+        "max_tokens": 4000,   # dinaikkan: jawaban chat bisa panjang
     },
     "report": {
-        "model": os.getenv("MODEL_REPORT", "qwen/qwen3-6b-plus"),
+        "model": os.getenv("MODEL_REPORT", "qwen3.6-plus"),
         "temperature": 0.2,   # ringkasan terstruktur
-        "max_tokens": 2000,
+        "max_tokens": 4000,   # dinaikkan: ringkasan harian + think block
     },
 }
 
@@ -112,6 +115,13 @@ def call_llm(
     if response_format == "json":
         request_kwargs["response_format"] = {"type": "json_object"}
 
+    # Disable thinking mode untuk model qwen3 agar tidak makan token berlebihan.
+    # Model qwen3 secara default menyertakan <think>...</think> block sebelum
+    # output aktual — ini membuang token dan membuat JSON rawan terpotong.
+    # extra_body ini dikenali oleh Sumopod/vLLM OpenAI-compatible endpoint.
+    if "qwen3" in model_name.lower() or "qwen/qwen3" in model_name.lower():
+        request_kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
+
     last_error = None
     for attempt in range(1, MAX_RETRIES + 1):
         metadata["attempt"] = attempt
@@ -161,9 +171,28 @@ def call_llm_json(
 
     try:
         cleaned = raw.strip()
+
+        # ── Strip <think>...</think> block dari qwen3 thinking mode ──────────
+        # Model qwen3 kadang tetap mengeluarkan think block meski thinking
+        # dinonaktifkan, atau jika model lain yang dipakai mendukung thinking.
+        # Kita strip ini terlebih dahulu agar JSON parsing tidak terganggu.
+        import re
+        cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL).strip()
+
+        # Strip markdown code fences
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
-            cleaned = "\n".join(lines[1:-1])
+            # Hapus baris pertama (```json atau ```) dan baris terakhir (```)
+            cleaned = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        cleaned = cleaned.strip()
+
+        # Jika response bukan JSON murni, cari blok JSON di dalamnya
+        if not cleaned.startswith("{") and not cleaned.startswith("["):
+            # Coba ekstrak JSON dari teks bebas
+            json_match = re.search(r'(\{.*\}|\[.*\])', cleaned, re.DOTALL)
+            if json_match:
+                cleaned = json_match.group(1)
+
         parsed = json.loads(cleaned)
         return parsed, metadata
 
@@ -182,6 +211,7 @@ def call_llm_json(
             return parsed, metadata
         except json.JSONDecodeError:
             print(f"[{agent_name}] JSON parse error: {e}")
+            print(f"[{agent_name}] Raw response (first 500 chars): {raw[:500]}")
             return {}, metadata
 
 
