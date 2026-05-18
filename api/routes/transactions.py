@@ -15,8 +15,13 @@ from core.database_new import (
     get_transaction_by_code,
     update_transaction,
     soft_delete_transaction,
+    get_daily_summary,
+    get_cash_balance,
 )
 from core.pipeline import trigger_pipeline
+from datetime import datetime, timezone, timedelta
+
+WIB = timezone(timedelta(hours=7))
 
 router = APIRouter(prefix="/transactions", tags=["Transactions"])
 
@@ -101,7 +106,102 @@ async def list_transactions(
         limit=limit,
         offset=offset,
     )
-    return BaseResponse(success=True, data=txs)
+    
+    # Hitung summary cepat
+    total_income  = sum(t["amount"] for t in txs if t.get("type") == "income")
+    total_expense = sum(t["amount"] for t in txs if t.get("type") == "expense")
+    
+    return BaseResponse(
+        success=True,
+        data={
+            "items": txs,
+            "total_income": total_income,
+            "total_expense": total_expense,
+            "count": len(txs),
+        }
+    )
+
+
+@router.get("/dashboard", response_model=BaseResponse)
+async def get_transactions_dashboard(
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Dashboard transaksi: daftar transaksi + health analysis dari pipeline.
+    Menggabungkan data v2 transactions + daily_summaries dari background pipeline.
+    """
+    user_id = current_user["id"]
+    now = datetime.now(WIB)
+    today = now.strftime('%Y-%m-%d')
+    month_start = now.strftime('%Y-%m-01')
+
+    # Ambil transaksi terbaru
+    txs = get_transactions_by_user(user_id=user_id, limit=50)
+    
+    # Ambil daily summary dari pipeline
+    summary_today = get_daily_summary(user_id, today)
+    
+    # Fallback kalau pipeline belum jalan: hitung manual dari transaksi
+    if not summary_today:
+        cash_balance = get_cash_balance(user_id)
+        income_total  = sum(t["amount"] for t in txs if t.get("type") == "income")
+        expense_total = sum(t["amount"] for t in txs if t.get("type") == "expense")
+        # Hitung burn rate harian dari 30 hari terakhir
+        now_wib = datetime.now(WIB)
+        month_start = now_wib.strftime('%Y-%m-01')
+        txs_month = get_transactions_by_user(user_id=user_id, date_from=month_start, limit=200)
+        days_in_period = max(now_wib.day, 1)
+        month_expense = sum(t["amount"] for t in txs_month if t.get("type") == "expense")
+        burn_day = month_expense / days_in_period if days_in_period > 0 else 0
+        runway = round(cash_balance / burn_day) if burn_day > 0 else 999
+
+        summary_today = {
+            "health_score":    0,
+            "runway_days":     runway,
+            "burn_rate_daily": burn_day,
+            "total_income":    income_total,
+            "total_expense":   expense_total,
+            "net_cashflow":    income_total - expense_total,
+            "agent_narrative": "Belum ada analisis hari ini. Tambah transaksi untuk memulai.",
+            "anomaly_count":   0,
+            "has_critical_anomaly": 0,
+        }
+    
+    cash_balance = get_cash_balance(user_id)
+    health_score = summary_today.get("health_score", 0)
+    status = (
+        "DANGER"  if health_score < 40 else
+        "WARNING" if health_score < 65 else
+        "SAFE"
+    )
+    
+    # Hitung summary dari transaksi yang ditampilkan
+    total_income  = sum(t["amount"] for t in txs if t.get("type") == "income")
+    total_expense = sum(t["amount"] for t in txs if t.get("type") == "expense")
+
+    return BaseResponse(
+        success=True,
+        data={
+            "transactions": txs,
+            "summary": {
+                "total_income":  total_income,
+                "total_expense": total_expense,
+                "net_cashflow":  total_income - total_expense,
+                "count":         len(txs),
+            },
+            "health": {
+                "score":     health_score,
+                "status":    status,
+                "narrative": summary_today.get("agent_narrative", ""),
+                "runway_days":     summary_today.get("runway_days", 0),
+                "burn_rate_daily": summary_today.get("burn_rate_daily", 0),
+                "anomaly_count":   summary_today.get("anomaly_count", 0),
+                "has_critical":    bool(summary_today.get("has_critical_anomaly", 0)),
+                "cash_balance":    cash_balance,
+            },
+            "last_updated": summary_today.get("processed_at", ""),
+        }
+    )
 
 
 @router.get("/{transaction_code}", response_model=BaseResponse)
@@ -126,7 +226,7 @@ async def edit_transaction(
     user_id = current_user["id"]
     tx = get_transaction_by_code(user_id, transaction_code)
     if not tx:
-        raise HTTPException(status_code=404, detail="Transaksi tidak ditemukan.")
+        raise HTTPException(status_code=404, detail=f"Transaksi {transaction_code} tidak ditemukan.")
 
     # Merge data lama dengan update
     updated_data = {
@@ -147,7 +247,7 @@ async def edit_transaction(
 
     return BaseResponse(
         success=True,
-        message="Transaksi diperbarui. AI sedang re-analisis...",
+        message=f"Transaksi {transaction_code} diperbarui. AI sedang re-analisis...",
         data=updated_tx,
     )
 
