@@ -112,6 +112,7 @@ def call_llm(
     if response_format == "json":
         request_kwargs["response_format"] = {"type": "json_object"}
 
+    last_error = None
     for attempt in range(1, MAX_RETRIES + 1):
         metadata["attempt"] = attempt
         try:
@@ -126,20 +127,21 @@ def call_llm(
             return content, metadata
 
         except Exception as e:
+            last_error = e
             error_msg = str(e)
             is_rate_limit = "429" in error_msg or "rate" in error_msg.lower()
-            print(f"[{agent_name}] Attempt {attempt}/{MAX_RETRIES} failed: "
-                  f"{'RATE LIMITED' if is_rate_limit else error_msg[:100]}")
+            print(f"[LLM-ERROR] [{agent_name}] Attempt {attempt}/{MAX_RETRIES} failed: "
+                  f"{'RATE LIMITED' if is_rate_limit else error_msg}")
 
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_DELAY * attempt)
-            else:
-                print(f"[{agent_name}] Switching to fallback...")
-                metadata["used_fallback"] = True
-                metadata["duration_ms"] = int((time.time() - start_time) * 1000)
-                return _get_fallback_response(agent_name), metadata
 
-    return "", metadata
+    # Semua retry habis — raise error supaya pipeline terlihat gagal di log
+    metadata["duration_ms"] = int((time.time() - start_time) * 1000)
+    raise RuntimeError(
+        f"[{agent_name}] LLM gagal setelah {MAX_RETRIES} percobaan. "
+        f"Error terakhir: {last_error}"
+    )
 
 
 def call_llm_json(
