@@ -195,13 +195,7 @@ def _get_fallback_response(agent_name: str) -> str:
             "confidence": 0.3,
             "sak_etap_note": "Klasifikasi fallback — perlu review manual.",
         }),
-        "health": json.dumps({
-            "health_score": 50,
-            "health_status": "WARNING",
-            "burn_rate_daily": 0,
-            "runway_days": 0,
-            "narrative": "Analisis otomatis tidak tersedia. Sistem berjalan dalam mode terbatas.",
-        }),
+        "health": "Analisis otomatis tidak tersedia saat ini. Sistem berjalan dalam mode terbatas.",
         "anomaly": json.dumps({
             "anomalies": [],
             "overall_risk_level": "LOW",

@@ -159,11 +159,11 @@ Rujuk percakapan sebelumnya jika relevan."""
         from core.llm_client import _get_client, AGENT_CONFIG
         import time
 
-        config = AGENT_CONFIG.get("advisor", {})
+        config = AGENT_CONFIG.get("advisory", {})  # fix: was "advisor", key is "advisory"
         client = _get_client()
 
         response = client.chat.completions.create(
-            model=config.get("model", "claude-haiku-20240307"),
+            model=config.get("model", "qwen/qwen3-6b-plus"),
             messages=messages_for_llm,
             temperature=config.get("temperature", 0.3),
             max_tokens=config.get("max_tokens", 1000),
