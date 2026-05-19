@@ -16,7 +16,10 @@ from core.database_new import (
     update_transaction,
     soft_delete_transaction,
     get_daily_summary,
+    get_financial_summary,
     get_cash_balance,
+    get_health_history,
+    get_unresolved_anomalies,
 )
 from core.pipeline import trigger_pipeline
 from datetime import datetime, timezone, timedelta
@@ -141,27 +144,23 @@ async def get_transactions_dashboard(
     # Ambil daily summary dari pipeline
     summary_today = get_daily_summary(user_id, today)
     
-    # Fallback kalau pipeline belum jalan: hitung manual dari transaksi
+    # Fallback kalau pipeline belum jalan — hitung live dari DB
     if not summary_today:
+        financial    = get_financial_summary(user_id, month_start, today)
         cash_balance = get_cash_balance(user_id)
-        income_total  = sum(t["amount"] for t in txs if t.get("type") == "income")
-        expense_total = sum(t["amount"] for t in txs if t.get("type") == "expense")
-        # Hitung burn rate harian dari 30 hari terakhir
-        now_wib = datetime.now(WIB)
-        month_start = now_wib.strftime('%Y-%m-01')
-        txs_month = get_transactions_by_user(user_id=user_id, date_from=month_start, limit=200)
-        days_in_period = max(now_wib.day, 1)
-        month_expense = sum(t["amount"] for t in txs_month if t.get("type") == "expense")
-        burn_day = month_expense / days_in_period if days_in_period > 0 else 0
-        runway = round(cash_balance / burn_day) if burn_day > 0 else 999
+        expense      = financial.get("total_expense", 0) or 0
+        income       = financial.get("total_income", 0) or 0
+        active_days  = max(financial.get("active_days", 1) or 1, 1)
+        burn_day     = expense / active_days
+        runway       = round(cash_balance / burn_day) if burn_day > 0 else 999
 
         summary_today = {
             "health_score":    0,
             "runway_days":     runway,
             "burn_rate_daily": burn_day,
-            "total_income":    income_total,
-            "total_expense":   expense_total,
-            "net_cashflow":    income_total - expense_total,
+            "total_income":    income,
+            "total_expense":   expense,
+            "net_cashflow":    income - expense,
             "agent_narrative": "Belum ada analisis hari ini. Tambah transaksi untuk memulai.",
             "anomaly_count":   0,
             "has_critical_anomaly": 0,
