@@ -176,30 +176,40 @@ def get_transactions_by_user(
     limit: int = 50,
     offset: int = 0,
 ) -> list:
+    """Ambil transaksi user. Handle transaksi lama (pakai 'date') dan baru (pakai 'date_only')."""
     from core.database import get_connection
     conn = get_connection()
     cursor = conn.cursor()
 
+    # Pilih kolom yang tersedia — datetime_wib mungkin kosong di transaksi lama
     query = """
-        SELECT transaction_code, datetime_wib, date_only, time_only,
-               type, amount, description, category, notes,
-               accounting_type, is_corrected, is_deleted
+        SELECT
+            COALESCE(NULLIF(transaction_code,''), 'TRX-LEGACY-' || id) as transaction_code,
+            COALESCE(NULLIF(datetime_wib,''), date || ' 00:00:00')      as datetime_wib,
+            COALESCE(NULLIF(date_only,''), date)                        as date_only,
+            COALESCE(NULLIF(time_only,''), '00:00:00')                  as time_only,
+            type, amount, description,
+            COALESCE(NULLIF(category,''), 'Lain-lain')                  as category,
+            COALESCE(notes, '')                                         as notes,
+            COALESCE(accounting_type, 'other')                         as accounting_type,
+            COALESCE(is_corrected, 0)                                  as is_corrected,
+            COALESCE(is_deleted, 0)                                    as is_deleted
         FROM transactions
         WHERE user_id = ? AND (is_deleted IS NULL OR is_deleted = 0)
     """
     params = [user_id]
 
     if date_from:
-        query += " AND date_only >= ?"
+        query += " AND COALESCE(NULLIF(date_only,''), date) >= ?"
         params.append(date_from)
     if date_to:
-        query += " AND date_only <= ?"
+        query += " AND COALESCE(NULLIF(date_only,''), date) <= ?"
         params.append(date_to)
     if tx_type:
         query += " AND type = ?"
         params.append(tx_type)
 
-    query += " ORDER BY datetime_wib DESC LIMIT ? OFFSET ?"
+    query += " ORDER BY COALESCE(NULLIF(datetime_wib,''), date) DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
 
     cursor.execute(query, params)
@@ -209,6 +219,11 @@ def get_transactions_by_user(
 
 
 def get_financial_summary(user_id: int, date_from: str, date_to: str) -> dict:
+    """
+    Aggregate query yang handle KEDUA sumber transaksi:
+    - Transaksi baru (kasir digital): punya date_only
+    - Transaksi lama (import): pakai kolom 'date' sebagai fallback
+    """
     from core.database import get_connection
     conn = get_connection()
     cursor = conn.cursor()
@@ -227,12 +242,12 @@ def get_financial_summary(user_id: int, date_from: str, date_to: str) -> dict:
             SUM(CASE WHEN accounting_type='asset_purchase'
                      THEN amount ELSE 0 END)            as asset_purchase,
             AVG(CASE WHEN type='expense' THEN amount END) as avg_expense_per_tx,
-            COUNT(DISTINCT date_only)                   as active_days
+            COUNT(DISTINCT COALESCE(NULLIF(date_only,''), date)) as active_days
         FROM transactions
         WHERE user_id = ?
-          AND date_only BETWEEN ? AND ?
+          AND COALESCE(NULLIF(date_only,''), date) BETWEEN ? AND ?
           AND (is_deleted IS NULL OR is_deleted = 0)
-          AND is_business = 1
+          AND (is_business IS NULL OR is_business = 1)
     """, (user_id, date_from, date_to))
 
     row = cursor.fetchone()
@@ -243,13 +258,14 @@ def get_financial_summary(user_id: int, date_from: str, date_to: str) -> dict:
 def get_spending_by_category_efficient(
     user_id: int, date_from: str, date_to: str
 ) -> list:
+    """Aggregate pengeluaran per kategori. Handle transaksi lama & baru."""
     from core.database import get_connection
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
         SELECT
-            category,
+            COALESCE(NULLIF(category,''), 'Lain-lain') as category,
             SUM(amount)   as total,
             COUNT(*)      as count,
             AVG(amount)   as avg_per_tx,
@@ -258,10 +274,10 @@ def get_spending_by_category_efficient(
         FROM transactions
         WHERE user_id = ?
           AND type = 'expense'
-          AND date_only BETWEEN ? AND ?
+          AND COALESCE(NULLIF(date_only,''), date) BETWEEN ? AND ?
           AND (is_deleted IS NULL OR is_deleted = 0)
-          AND is_business = 1
-        GROUP BY category
+          AND (is_business IS NULL OR is_business = 1)
+        GROUP BY COALESCE(NULLIF(category,''), 'Lain-lain')
         ORDER BY total DESC
     """, (user_id, date_from, date_to))
 
@@ -271,6 +287,7 @@ def get_spending_by_category_efficient(
 
 
 def get_cash_balance(user_id: int) -> float:
+    """Saldo kas = total income - total expense SEMUA WAKTU."""
     from core.database import get_connection
     conn = get_connection()
     cursor = conn.cursor()
@@ -282,7 +299,7 @@ def get_cash_balance(user_id: int) -> float:
         FROM transactions
         WHERE user_id = ?
           AND (is_deleted IS NULL OR is_deleted = 0)
-          AND is_business = 1
+          AND (is_business IS NULL OR is_business = 1)
     """, (user_id,))
 
     row = cursor.fetchone()
