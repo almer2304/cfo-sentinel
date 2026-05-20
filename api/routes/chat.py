@@ -118,8 +118,9 @@ def _build_context(user_id: int, user: dict, intents: list[str], message: str) -
         "- Saldo = Pemasukan - Pengeluaran (selisih/laba kotor)",
     ]
 
-    # Selalu sertakan summary ringkas bulan ini
+    # Selalu sertakan summary ringkas bulan ini dan HARI INI
     summary = get_financial_summary(user_id, month_start, today)
+    summary_today = get_financial_summary(user_id, today, today)
     cash_balance = get_cash_balance(user_id)
 
     income  = summary.get("total_income", 0) or 0
@@ -130,7 +131,16 @@ def _build_context(user_id: int, user: dict, intents: list[str], message: str) -
     burn_day = expense / active_days
     runway = round(cash_balance / burn_day) if burn_day > 0 else 999
 
+    income_today = summary_today.get("total_income", 0) or 0
+    expense_today = summary_today.get("total_expense", 0) or 0
+    tx_count_today = summary_today.get("total_tx", 0) or 0
+
     parts.append(
+        f"\n=== RINGKASAN HARI INI ({today}) ==="
+        f"\n- Pemasukan/Penjualan Hari Ini: Rp {income_today:,.0f}"
+        f"\n- Pengeluaran/Pembelian Hari Ini: Rp {expense_today:,.0f}"
+        f"\n- Jumlah Transaksi Hari Ini: {tx_count_today}"
+        f"\n"
         f"\n=== RINGKASAN BULAN INI ({month_start} s/d {today}) ==="
         f"\n- Total Pemasukan/Penjualan (income): Rp {income:,.0f}"
         f"\n- Total Pengeluaran/Pembelian (expense): Rp {expense:,.0f}"

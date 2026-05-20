@@ -159,7 +159,7 @@ def _build_analyst_output() -> AnalystOutput:
         cash_balance=10_095_000,
         burn_rate_daily=343_571,
         burn_rate_monthly=10_307_130,
-        gross_margin=57.5,
+        net_margin=57.5,
         runway_days=ConfidenceRange(
             minimum=23, expected=29, maximum=37,
             assumption="Pengeluaran konstan tanpa pemasukan baru",
@@ -295,7 +295,7 @@ def _build_advisor_output() -> AdvisorOutput:
         detailed_advice=(
             "**Kondisi Saat Ini (Positif):**\n"
             "- Health Score 74/100 — naik dari 68 bulan lalu ✅\n"
-            "- Gross margin 57,5% — baik untuk skala warung\n"
+            "- Net margin 57,5% — baik untuk skala warung\n"
             "- Penjualan mingguan stabil (Sabtu+Minggu = Rp 3,9jt)\n\n"
             "**Risiko yang Perlu Diatasi:**\n"
             "- Konsentrasi pendapatan: 1 order katering = 44% total income\n"

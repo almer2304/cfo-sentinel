@@ -33,7 +33,7 @@ def _safe_get(obj, key, default=None):
 
 
 def _compute_health_score(
-    gross_margin:       float,
+    net_margin:       float,
     runway_days:        float,
     net_cashflow:       float,
     total_income:       float,
@@ -46,8 +46,8 @@ def _compute_health_score(
     # Komponen 1: Runway
     runway_score = min(35, (runway_days / 60) * 35)
 
-    # Komponen 2: Gross margin
-    margin_score = min(30, max(0, (gross_margin / 30) * 30))
+    # Komponen 2: Net margin
+    margin_score = min(30, max(0, (net_margin / 30) * 30))
 
     # Komponen 3: Cash flow direction
     cashflow_score = 25 if net_cashflow >= 0 else max(
@@ -65,20 +65,20 @@ def _compute_health_score(
 def _compute_revenue_consistency(transactions) -> float:
     """
     Hitung konsistensi pemasukan (0.0–1.0).
-    1.0 = pemasukan merata setiap hari
-    0.0 = semua pemasukan di 1 hari
+    Menggunakan rasio hari aktif pemasukan terhadap total hari dalam rentang (atau 30 hari).
+    1.0 = ada pemasukan setiap hari
+    0.0 = jarang sekali ada pemasukan
     """
     income_txs = [
         t for t in transactions
         if _safe_get(t, "type") == "income"
     ]
-    if len(income_txs) <= 1:
-        return 0.5  # default jika data terlalu sedikit
+    if not income_txs:
+        return 0.0
 
-    # Hitung spread tanggal transaksi income
-    dates = set(_safe_get(t, "date", "") for t in income_txs)
-    spread_ratio = len(dates) / max(len(income_txs), 1)
-    return min(1.0, spread_ratio)
+    dates_with_income = len(set(_safe_get(t, "date", "") for t in income_txs))
+    # Asumsikan rentang penilaian adalah 30 hari
+    return min(1.0, dates_with_income / 30.0)
 
 
 def run_analyst_agent(
@@ -166,12 +166,12 @@ def run_analyst_agent(
     min_runway = max(0, expected_runway * 0.8)
     max_runway = expected_runway * 1.2
 
-    # Gross margin: gunakan actual_beban (bukan total_expense)
+    # Net margin: gunakan actual_beban (bukan total_expense)
     # agar pembelian persediaan tidak menurunkan margin
     if total_income > 0:
-        gross_margin = max(0, ((total_income - actual_beban) / total_income) * 100)
+        net_margin = max(0, ((total_income - actual_beban) / total_income) * 100)
     else:
-        gross_margin = 0
+        net_margin = 0
 
     # Revenue consistency
     revenue_consistency = _compute_revenue_consistency(
@@ -180,7 +180,7 @@ def run_analyst_agent(
 
     # ── Health Score ─────────────────────────────────────────────
     hs_score = _compute_health_score(
-        gross_margin=gross_margin,
+        net_margin=net_margin,
         runway_days=expected_runway,
         net_cashflow=net_cashflow,
         total_income=total_income,
@@ -244,7 +244,7 @@ def run_analyst_agent(
         "cash_balance":          cash_balance,
         "burn_rate_daily":       burn_rate_daily,
         "runway_expected":       expected_runway,
-        "gross_margin":          gross_margin,
+        "net_margin":          net_margin,
         "health_score":          hs_score,
         "health_score_prev":     prev_score,
         "health_score_industry": industry_avg,
@@ -277,7 +277,7 @@ def run_analyst_agent(
         cash_balance=cash_balance,
         burn_rate_daily=burn_rate_daily,
         burn_rate_monthly=burn_rate_monthly,
-        gross_margin=gross_margin,
+        net_margin=net_margin,
         runway_days=ConfidenceRange(
             minimum=min_runway,
             expected=expected_runway,

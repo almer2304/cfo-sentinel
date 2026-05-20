@@ -43,7 +43,7 @@ def _build_analysis_response(result, session_id: str) -> AnalysisResponse:
         cash_balance=analyst.cash_balance,
         burn_rate_daily=analyst.burn_rate_daily,
         burn_rate_monthly=analyst.burn_rate_monthly,
-        gross_margin=analyst.gross_margin,
+        net_margin=analyst.net_margin,
         runway_min=analyst.runway_days.minimum,
         runway_expected=analyst.runway_days.expected,
         runway_max=analyst.runway_days.maximum,

@@ -217,7 +217,7 @@ def node_analyst(state: dict) -> dict:
                 f"Health: {output.health_score.current:.0f}/100 "
                 f"({output.health_score.status}). "
                 f"Runway: {output.runway_days.expected:.0f} days. "
-                f"Gross margin: {output.gross_margin:.1f}%. "
+                f"Net margin: {output.net_margin:.1f}%. "
                 f"Burn rate: Rp {output.burn_rate_daily:,.0f}/day"
             ),
             output_summary=(
@@ -484,7 +484,7 @@ def node_finalize(state: dict) -> dict:
                 "cash_balance":           analyst_output.cash_balance,
                 "burn_rate_daily":        analyst_output.burn_rate_daily,
                 "burn_rate_monthly":      analyst_output.burn_rate_monthly,
-                "gross_margin":           analyst_output.gross_margin,
+                "net_margin":           analyst_output.net_margin,
                 "runway_days":            analyst_output.runway_days.expected,
                 "revenue_consistency":    analyst_output.revenue_consistency,
                 "health_score":           analyst_output.health_score.current,

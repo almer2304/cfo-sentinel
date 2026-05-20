@@ -199,7 +199,7 @@ class AnalystOutput(BaseModel):
     cash_balance:           float = 0
     burn_rate_daily:        float = 0
     burn_rate_monthly:      float = 0
-    gross_margin:           float = 0
+    net_margin:           float = 0
     runway_days:            ConfidenceRange = Field(
         default_factory=lambda: ConfidenceRange(minimum=0, expected=0, maximum=0)
     )

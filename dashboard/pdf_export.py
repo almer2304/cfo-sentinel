@@ -98,7 +98,7 @@ def generate_pdf_report(pipeline_state) -> bytes:
          f"({analyst.runway_days.minimum:.0f}-"
          f"{analyst.runway_days.maximum:.0f} hari)"),
         ('Keuntungan per Penjualan', 
-         f"{analyst.gross_margin:.1f}%"),
+         f"{analyst.net_margin:.1f}%"),
     ]
     
     pdf.set_font('Helvetica', '', 10)

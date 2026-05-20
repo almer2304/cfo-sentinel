@@ -461,7 +461,7 @@ def render_overview(state: PipelineState):
         st.metric("Uang Bertahan Sampai", f"{analyst.runway_days.expected:.0f} hari",
                   f"min {analyst.runway_days.minimum:.0f}d")
     with col4:
-        st.metric("Keuntungan per Penjualan", f"{analyst.gross_margin:.1f}%")
+        st.metric("Keuntungan per Penjualan", f"{analyst.net_margin:.1f}%")
 
     # Metrik baris 2
     col1, col2, col3, col4 = st.columns(4)

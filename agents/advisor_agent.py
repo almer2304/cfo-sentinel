@@ -44,7 +44,7 @@ def _build_analyst_summary(analyst: AnalystOutput) -> str:
         f"- Burn Rate Harian:  Rp {analyst.burn_rate_daily:,.0f}",
         f"- Runway:            {runway.expected:.0f} hari "
         f"(min {runway.minimum:.0f} – max {runway.maximum:.0f})",
-        f"- Gross Margin:      {analyst.gross_margin:.1f}%",
+        f"- Net Margin:      {analyst.net_margin:.1f}%",
         f"- Health Score:      {hs.current:.0f}/100 "
         f"(bulan lalu: {hs.previous_month:.0f}, "
         f"industri: {hs.industry_average:.0f})",
@@ -303,7 +303,7 @@ Saldo saat ini:    Rp {analyst_output.cash_balance:,.0f}
 Burn rate harian:  Rp {analyst_output.burn_rate_daily:,.0f}
 Runway:            {analyst_output.runway_days.expected:.0f} hari
 Health Score:      {hs.current:.0f}/100 ({hs.status})
-Gross Margin:      {analyst_output.gross_margin:.1f}%
+Net Margin:      {analyst_output.net_margin:.1f}%
 Anomali ditemukan: {anomaly_output.total_anomalies} 
   (HIGH: {anomaly_output.high_severity_count})
 Risk Level:        {anomaly_output.overall_risk_level}

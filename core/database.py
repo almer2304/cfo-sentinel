@@ -89,7 +89,7 @@ def init_database():
             cash_balance            REAL DEFAULT 0,
             burn_rate_daily         REAL DEFAULT 0,
             burn_rate_monthly       REAL DEFAULT 0,
-            gross_margin            REAL DEFAULT 0,
+            net_margin            REAL DEFAULT 0,
             runway_days             REAL DEFAULT 0,
             revenue_consistency     REAL DEFAULT 0,  -- 0.0-1.0
             health_score            REAL DEFAULT 0,  -- 0-100
@@ -541,7 +541,7 @@ def save_analytics(analytics: dict, session_id: str, user_id: int = None):
         INSERT INTO analytics (
             session_id, period_start, period_end,
             total_income, total_expense, net_cashflow, cash_balance,
-            burn_rate_daily, burn_rate_monthly, gross_margin,
+            burn_rate_daily, burn_rate_monthly, net_margin,
             runway_days, revenue_consistency,
             health_score, health_score_prev, health_score_industry,
             health_score_threshold, forecast_30d, narrative,
@@ -553,7 +553,7 @@ def save_analytics(analytics: dict, session_id: str, user_id: int = None):
         analytics.get("total_income", 0), analytics.get("total_expense", 0),
         analytics.get("net_cashflow", 0), analytics.get("cash_balance", 0),
         analytics.get("burn_rate_daily", 0), analytics.get("burn_rate_monthly", 0),
-        analytics.get("gross_margin", 0), analytics.get("runway_days", 0),
+        analytics.get("net_margin", 0), analytics.get("runway_days", 0),
         analytics.get("revenue_consistency", 0),
         analytics.get("health_score", 0), analytics.get("health_score_prev", 0),
         analytics.get("health_score_industry", 0),

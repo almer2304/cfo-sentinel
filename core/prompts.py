@@ -199,7 +199,7 @@ memiliki latar belakang keuangan formal.
 WAJIB lakukan ini:
 1. Ganti semua istilah teknis ke bahasa sehari-hari:
    - "Burn rate" → "uang yang habis setiap hari"
-   - "Gross margin" → "keuntungan kotor dari setiap penjualan"
+   - "Net margin" → "keuntungan kotor dari setiap penjualan"
    - "Net cash flow" → "sisa uang setelah semua pengeluaran"
    - "Runway" → "berapa hari lagi uang bisa bertahan"
    - "Deviation" → "perbedaan dari biasanya"
@@ -239,7 +239,7 @@ Net Cash Flow: Rp {net_cashflow:,.0f}
 Saldo Saat Ini: Rp {cash_balance:,.0f}
 Burn Rate Harian: Rp {burn_rate_daily:,.0f}
 Runway: {runway_expected:.0f} hari (perkiraan)
-Gross Margin: {gross_margin:.1f}%
+Net Margin: {net_margin:.1f}%
 Health Score: {health_score:.0f}/100 (bulan lalu: {health_score_prev:.0f})
 Rata-rata industri ({business_type}): {health_score_industry:.0f}/100
 Jenis Bisnis: {business_type}
@@ -317,8 +317,11 @@ Balas HANYA dengan JSON.
 
 
 ANOMALY_USER_PROMPT = """
-Data pengeluaran bulan ini per kategori:
+Data pengeluaran bulan ini per kategori (Macro):
 {current_spending}
+
+5 Transaksi Pengeluaran Terbesar (Micro):
+{largest_transactions}
 
 Baseline historis (rata-rata 3 bulan terakhir):
 {baseline_data}
@@ -328,7 +331,7 @@ Output Financial Analyst yang perlu divalidasi:
 - Health Score: {health_score}/100
 - Narrative: {analyst_narrative}
 
-Lakukan deteksi anomali dan validasi output Analyst.
+Lakukan deteksi anomali dan validasi output Analyst. Perhatikan juga 5 transaksi pengeluaran terbesar di atas; jika ada transaksi tunggal yang nilainya sangat dominan atau aneh dibandingkan kebiasaan (micro anomaly), laporkan sebagai anomali.
 """
 
 
@@ -337,6 +340,10 @@ def get_anomaly_prompt(data: dict) -> str:
         f"- {item['category']}: Rp {item['total']:,.0f}"
         for item in data.get("current_spending", [])
     ])
+    largest_txs = "\n".join([
+        f"- {tx['date']} | {tx['category']} | {tx['description']}: Rp {tx['amount']:,.0f}"
+        for tx in data.get("largest_transactions", [])
+    ])
     baseline = "\n".join([
         f"- {item['category']}: Rp {item['avg_monthly']:,.0f} "
         f"(±Rp {item['std_deviation']:,.0f})"
@@ -344,6 +351,7 @@ def get_anomaly_prompt(data: dict) -> str:
     ])
     return ANOMALY_USER_PROMPT.format(
         current_spending=current or "Tidak ada data",
+        largest_transactions=largest_txs or "Tidak ada data",
         baseline_data=baseline or "Tidak ada baseline — ini bulan pertama",
         runway_days=data.get("runway_days", 0),
         health_score=data.get("health_score", 0),
@@ -475,7 +483,7 @@ memiliki latar belakang keuangan formal.
 WAJIB lakukan ini:
 1. Ganti semua istilah teknis ke bahasa sehari-hari:
    - "Burn rate" → "uang yang habis setiap hari"
-   - "Gross margin" → "keuntungan kotor dari setiap penjualan"
+   - "Net margin" → "keuntungan kotor dari setiap penjualan"
    - "Net cash flow" → "sisa uang setelah semua pengeluaran"
    - "Runway" → "berapa hari lagi uang bisa bertahan"
    - "Deviation" → "perbedaan dari biasanya"

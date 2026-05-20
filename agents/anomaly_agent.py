@@ -37,11 +37,27 @@ def run_anomaly_agent(
         )
         if total > 0:
             current_spending.append({"category": c, "total": total})
+
+    # Dapatkan 5 transaksi pengeluaran terbesar untuk Micro Anomaly Detection
+    expenses = [
+        t for t in categorizer_output.transactions
+        if _safe_get(t, "type") == "expense"
+    ]
+    expenses_sorted = sorted(expenses, key=lambda x: _safe_get(x, "amount", 0), reverse=True)
+    largest_transactions = []
+    for t in expenses_sorted[:5]:
+        largest_transactions.append({
+            "date": _safe_get(t, "date"),
+            "description": _safe_get(t, "description"),
+            "amount": _safe_get(t, "amount", 0),
+            "category": _safe_get(t, "category")
+        })
             
     baselines = load_baselines_for_analysis(business_type)
     
     prompt_data = {
         "current_spending": current_spending,
+        "largest_transactions": largest_transactions,
         "baseline_data": baselines,
         "runway_days": analyst_output.runway_days.expected,
         "health_score": analyst_output.health_score.current,

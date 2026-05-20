@@ -34,7 +34,7 @@ class MetricsData(BaseModel):
     cash_balance: float
     burn_rate_daily: float
     burn_rate_monthly: float
-    gross_margin: float
+    net_margin: float
     runway_min: float
     runway_expected: float
     runway_max: float
