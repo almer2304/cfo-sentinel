@@ -31,7 +31,7 @@ revenue, operational_expense, cogs, asset_purchase,
 debt_payment, receivable, other
 
 Balas HANYA dengan JSON:
-{"accounting_type": "...", "category": "...", "is_recurring": false}
+{"accounting_type": "...", "is_recurring": false}
 """
 
 
@@ -46,8 +46,7 @@ def run_classifier_agent(transaction: dict, user_id: int) -> dict:
     user_message = (
         f"Transaksi: {transaction['type']} - "
         f"{transaction['description']} - "
-        f"Rp {transaction['amount']:,.0f} - "
-        f"Kategori saat ini: {transaction.get('category', 'Lain-lain')}"
+        f"Rp {transaction['amount']:,.0f}"
     )
 
     result, meta = call_llm_json(
@@ -64,13 +63,11 @@ def run_classifier_agent(transaction: dict, user_id: int) -> dict:
         cursor.execute("""
             UPDATE transactions
             SET accounting_type   = ?,
-                category         = ?,
                 is_recurring     = ?,
                 agent_classified = 1
             WHERE transaction_code = ? AND user_id = ?
         """, (
             result.get("accounting_type", "other"),
-            result.get("category", transaction.get("category", "Lain-lain")),
             1 if result.get("is_recurring") else 0,
             transaction["transaction_code"],
             user_id,
@@ -90,4 +87,4 @@ def run_classifier_agent(transaction: dict, user_id: int) -> dict:
         user_id=user_id,
     )
 
-    return result or {"accounting_type": "other", "category": transaction.get("category", "Lain-lain")}
+    return result or {"accounting_type": "other"}

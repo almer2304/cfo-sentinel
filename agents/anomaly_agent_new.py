@@ -17,8 +17,9 @@ Kamu adalah Risk Analyst dan Fraud Detection Specialist dengan
 pengalaman 10 tahun menganalisis pola transaksi keuangan UMKM Indonesia.
 
 TUGASMU:
-Analisis data pengeluaran per kategori dan deteksi anomali.
-Bandingkan periode ini dengan baseline historis.
+Analisis data pengeluaran dan deteksi anomali.
+Bandingkan pengeluaran periode ini dengan baseline historis.
+Abaikan kategori pengeluaran karena pencatatan dilakukan tanpa kategori spesifik.
 
 KRITERIA ANOMALI:
 - HIGH:   deviasi > 100% dari baseline (lebih dari 2x lipat)
@@ -31,7 +32,6 @@ Balas HANYA dengan JSON:
 {
   "anomalies": [
     {
-      "category": "...",
       "severity": "HIGH|MEDIUM|LOW",
       "description": "penjelasan singkat dalam Bahasa Indonesia",
       "suggested_action": "saran konkret dalam 1 kalimat"
@@ -96,11 +96,9 @@ def run_anomaly_agent(user_id: int) -> dict:
         conn = get_connection()
         cursor = conn.cursor()
         for a in anomalies:
-            cat_data = next(
-                (c for c in current if c["category"] == a.get("category")), {}
-            )
-            baseline_amt = baseline_map.get(a.get("category", ""), 0)
-            current_amt  = cat_data.get("total", 0)
+            # Gunakan total semua kategori karena kategori dihilangkan
+            baseline_amt = sum(b["total"] for b in baseline_raw) / 3 if baseline_raw else 0
+            current_amt  = sum(c["total"] for c in current) if current else 0
             deviation    = ((current_amt - baseline_amt) / max(baseline_amt, 1)) * 100
 
             cursor.execute("""
@@ -108,10 +106,9 @@ def run_anomaly_agent(user_id: int) -> dict:
                     user_id, category, severity,
                     current_amount, baseline_amount, deviation_pct,
                     description, suggested_action
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 user_id,
-                a.get("category", ""),
+                "Lain-lain",
                 a.get("severity", "LOW"),
                 current_amt, baseline_amt, round(deviation, 1),
                 a.get("description", ""),
