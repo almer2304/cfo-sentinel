@@ -11,6 +11,7 @@ class RegisterRequest(BaseModel):
     email: str
     password: str
     business_type: str = "general"
+    initial_cash_balance: float = 0.0
 
 class AnalysisRequest(BaseModel):
     raw_input: str

@@ -63,6 +63,30 @@ async def register(request: RegisterRequest):
 
     token = create_session_token(user["id"])
 
+    # Simpan saldo awal sebagai transaksi pertama jika > 0
+    if request.initial_cash_balance > 0:
+        from core.database_new import save_transaction_simple
+        from core.database import get_connection
+        
+        # Simpan secara manual jurnal 'Modal Awal'
+        tx = save_transaction_simple(
+            user_id=user["id"],
+            raw_input=f"Saldo Awal saat pendaftaran: Rp {request.initial_cash_balance:,.0f}",
+            notes="Opening Balance (Auto-generated from Register)"
+        )
+        
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE transactions 
+            SET amount = ?, type = 'income', category = 'Modal',
+                debit_account = 'Kas', credit_account = 'Modal Pemilik',
+                agent_classified = 1
+            WHERE transaction_code = ?
+        """, (request.initial_cash_balance, tx["transaction_code"]))
+        conn.commit()
+        conn.close()
+
     return TokenResponse(
         success=True,
         token=token,
