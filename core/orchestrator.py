@@ -99,7 +99,11 @@ def node_parser(state: dict) -> dict:
         if output.has_ambiguity:
             print(f"  ⚠️  Ambiguity: {output.ambiguity_notes}")
 
-        return {**state, "parser_output": output, "current_step": "parser_done"}
+        return {
+            **state, 
+            "parser_output": output, 
+            "current_step": "parser_done"
+        }
 
     except Exception as e:
         errors.append(f"[Parser] {str(e)}")
@@ -252,8 +256,10 @@ def node_analyst(state: dict) -> dict:
         }
 
 
-def node_anomaly(state: dict) -> dict:
-    """Node 4: Deteksi anomali + Critic Pattern."""
+def node_anomaly_scenario(state: dict) -> dict:
+    """Node 4 & 5: Deteksi anomali + simulasi skenario secara paralel."""
+    from concurrent.futures import ThreadPoolExecutor
+
     analyst_output     = _get(state, "analyst_output")
     categorizer_output = _get(state, "categorizer_output")
     business_type      = _get(state, "business_type", "general")
@@ -262,86 +268,30 @@ def node_anomaly(state: dict) -> dict:
     warnings           = list(_get(state, "warnings", []))
 
     if not analyst_output or not categorizer_output:
-        warnings.append("Data tidak cukup untuk deteksi anomali.")
-        return {**state, "warnings": warnings, "current_step": "anomaly_done"}
+        warnings.append("Data tidak cukup untuk deteksi dan simulasi.")
+        return {
+            **state,
+            "warnings": warnings,
+            "current_step": "anomaly_scenario_done",
+        }
 
-    print("🔎 [Anomaly] Detecting anomalies + validating analyst output...")
+    print("🔎 [Parallel] Running Anomaly Detection & Scenario Simulation concurrently...")
     start = datetime.now()
 
-    try:
-        output = run_anomaly_agent(
+    anomaly_output = None
+    scenario_output = None
+
+    def run_anomaly():
+        nonlocal anomaly_output
+        anomaly_output = run_anomaly_agent(
             analyst_output=analyst_output,
             categorizer_output=categorizer_output,
             business_type=business_type,
         )
 
-        # Simpan anomali ke database
-        anomaly_dicts = [
-            a.model_dump() if hasattr(a, "model_dump") else dict(a)
-            for a in output.anomalies
-        ]
-        user_id = _get(state, "user_id")
-        if anomaly_dicts:
-            save_anomalies(anomaly_dicts, session_id, user_id=user_id)
-
-        log_agent_step(
-            session_id=session_id,
-            agent_name="anomaly",
-            step=4,
-            input_summary=(
-                f"Health score: {analyst_output.health_score.current:.0f}, "
-                f"spending categories: {len(categorizer_output.categories_found)}"
-            ),
-            reasoning=(
-                f"Found {output.total_anomalies} anomalies "
-                f"(HIGH: {output.high_severity_count}). "
-                f"Risk: {output.overall_risk_level}. "
-                f"Analyst valid: {output.analyst_output_valid}. "
-                f"Trigger reflection: {output.trigger_reflection}"
-            ),
-            output_summary=(
-                f"Anomalies: {output.total_anomalies} | "
-                f"Risk: {output.overall_risk_level}"
-            ),
-            duration_ms=int((datetime.now() - start).total_seconds() * 1000),
-            status="success",
-        )
-
-        print(f"  ✅ Anomalies: {output.total_anomalies} "
-              f"(HIGH: {output.high_severity_count})")
-        print(f"  🚦 Risk: {output.overall_risk_level}")
-        if output.trigger_reflection:
-            print("  🔄 Critic flag: Analyst perlu reflection")
-
-        return {
-            **state,
-            "anomaly_output": output,
-            "current_step": "anomaly_done",
-        }
-
-    except Exception as e:
-        errors.append(f"[Anomaly] {str(e)}")
-        print(f"  ❌ Anomaly error: {e}")
-        return {**state, "errors": errors, "current_step": "anomaly_done"}
-
-
-def node_scenario(state: dict) -> dict:
-    """Node 5: Scenario simulation."""
-    analyst_output     = _get(state, "analyst_output")
-    categorizer_output = _get(state, "categorizer_output")
-    session_id         = _get(state, "session_id")
-    errors             = list(_get(state, "errors", []))
-    warnings           = list(_get(state, "warnings", []))
-
-    if not analyst_output or not categorizer_output:
-        warnings.append("Data tidak cukup untuk simulasi skenario.")
-        return {**state, "warnings": warnings, "current_step": "scenario_done"}
-
-    print("🎯 [Scenario] Running what-if simulation...")
-    start = datetime.now()
-
-    try:
-        output = run_scenario_agent(
+    def run_scenario():
+        nonlocal scenario_output
+        scenario_output = run_scenario_agent(
             analyst_output=analyst_output,
             categorizer_output=categorizer_output,
             scenario_description="Penjualan turun 20% bulan depan",
@@ -349,41 +299,92 @@ def node_scenario(state: dict) -> dict:
             parameter_change_pct=-20.0,
         )
 
-        log_agent_step(
-            session_id=session_id,
-            agent_name="scenario",
-            step=5,
-            input_summary="Default scenario: revenue -20%",
-            reasoning=(
-                f"New runway: {output.new_runway.expected:.0f} days "
-                f"(was {analyst_output.runway_days.expected:.0f}). "
-                f"New health: {output.new_health_score:.0f}. "
-                f"Cuttable: Rp {output.total_cuttable_amount:,.0f}. "
-                f"Breakeven day: {output.breakeven_day}"
-            ),
-            output_summary=(
-                f"Runway: {output.new_runway.expected:.0f}d | "
-                f"Health: {output.new_health_score:.0f}/100"
-            ),
-            duration_ms=int((datetime.now() - start).total_seconds() * 1000),
-            status="success",
-        )
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(run_anomaly),
+                executor.submit(run_scenario),
+            ]
+            for future in futures:
+                future.result()
 
-        print(f"  ✅ New runway: {output.new_runway.expected:.0f} hari")
-        print(f"  💰 Cuttable: Rp {output.total_cuttable_amount:,.0f}")
+        # Database logging & saving (Anomaly)
+        user_id = _get(state, "user_id")
+        if anomaly_output:
+            anomaly_dicts = [
+                a.model_dump() if hasattr(a, "model_dump") else dict(a)
+                for a in anomaly_output.anomalies
+            ]
+            if anomaly_dicts:
+                save_anomalies(anomaly_dicts, session_id, user_id=user_id)
+
+            log_agent_step(
+                session_id=session_id,
+                agent_name="anomaly",
+                step=4,
+                input_summary=(
+                    f"Health score: {analyst_output.health_score.current:.0f}, "
+                    f"spending categories: {len(categorizer_output.categories_found)}"
+                ),
+                reasoning=(
+                    f"Found {anomaly_output.total_anomalies} anomalies "
+                    f"(HIGH: {anomaly_output.high_severity_count}). "
+                    f"Risk: {anomaly_output.overall_risk_level}. "
+                    f"Analyst valid: {anomaly_output.analyst_output_valid}. "
+                    f"Trigger reflection: {anomaly_output.trigger_reflection}"
+                ),
+                output_summary=(
+                    f"Anomalies: {anomaly_output.total_anomalies} | "
+                    f"Risk: {anomaly_output.overall_risk_level}"
+                ),
+                duration_ms=int((datetime.now() - start).total_seconds() * 1000),
+                status="success",
+            )
+
+            print(f"  ✅ Anomalies: {anomaly_output.total_anomalies} "
+                  f"(HIGH: {anomaly_output.high_severity_count})")
+            print(f"  🚦 Risk: {anomaly_output.overall_risk_level}")
+            if anomaly_output.trigger_reflection:
+                print("  🔄 Critic flag: Analyst perlu reflection")
+
+        # Database logging & saving (Scenario)
+        if scenario_output:
+            log_agent_step(
+                session_id=session_id,
+                agent_name="scenario",
+                step=5,
+                input_summary="Default scenario: revenue -20%",
+                reasoning=(
+                    f"New runway: {scenario_output.new_runway.expected:.0f} days "
+                    f"(was {analyst_output.runway_days.expected:.0f}). "
+                    f"New health: {scenario_output.new_health_score:.0f}. "
+                    f"Cuttable: Rp {scenario_output.total_cuttable_amount:,.0f}."
+                ),
+                output_summary=(
+                    f"Runway: {scenario_output.new_runway.expected:.0f}d | "
+                    f"Health: {scenario_output.new_health_score:.0f}/100"
+                ),
+                duration_ms=int((datetime.now() - start).total_seconds() * 1000),
+                status="success",
+            )
+            print(f"  ✅ New runway: {scenario_output.new_runway.expected:.0f} hari")
+            print(f"  💰 Cuttable: Rp {scenario_output.total_cuttable_amount:,.0f}")
 
         return {
             **state,
-            "scenario_output": output,
-            "current_step": "scenario_done",
+            "anomaly_output": anomaly_output,
+            "scenario_output": scenario_output,
+            "current_step": "anomaly_scenario_done",
         }
 
     except Exception as e:
-        errors.append(f"[Scenario] {str(e)}")
-        warnings.append("Simulasi skenario gagal — lanjut tanpa scenario.")
-        print(f"  ❌ Scenario error: {e}")
-        return {**state, "errors": errors, "warnings": warnings,
-                "current_step": "scenario_done"}
+        errors.append(f"[Anomaly/Scenario Parallel] {str(e)}")
+        print(f"  ❌ Parallel step error: {e}")
+        return {
+            **state,
+            "errors": errors,
+            "current_step": "anomaly_scenario_done",
+        }
 
 
 def node_advisor(state: dict) -> dict:
@@ -548,28 +549,26 @@ def should_reflect(state: dict) -> Literal["reflect", "continue"]:
 # ══════════════════════════════════════════════════════════════════
 
 def build_pipeline():
-    """Build dan compile LangGraph pipeline."""
+    """Build dan compile LangGraph pipeline dengan parallel execution."""
     graph = StateGraph(dict)  # Pakai dict sebagai state type — lebih stabil
 
-    graph.add_node("parser",      node_parser)
-    graph.add_node("categorizer", node_categorizer)
-    graph.add_node("analyst",     node_analyst)
-    graph.add_node("anomaly",     node_anomaly)
-    graph.add_node("scenario",    node_scenario)
-    graph.add_node("advisor",     node_advisor)
-    graph.add_node("finalize",    node_finalize)
+    graph.add_node("parser",           node_parser)
+    graph.add_node("categorizer",      node_categorizer)
+    graph.add_node("analyst",          node_analyst)
+    graph.add_node("anomaly_scenario", node_anomaly_scenario)
+    graph.add_node("advisor",          node_advisor)
+    graph.add_node("finalize",         node_finalize)
 
-    graph.add_edge("parser",      "categorizer")
-    graph.add_edge("categorizer", "analyst")
-    graph.add_edge("analyst",     "anomaly")
+    graph.add_edge("parser",           "categorizer")
+    graph.add_edge("categorizer",      "analyst")
+    graph.add_edge("analyst",          "anomaly_scenario")
 
     graph.add_conditional_edges(
-        "anomaly",
+        "anomaly_scenario",
         should_reflect,
-        {"reflect": "analyst", "continue": "scenario"},
+        {"reflect": "analyst", "continue": "advisor"},
     )
 
-    graph.add_edge("scenario", "advisor")
     graph.add_edge("advisor",  "finalize")
     graph.add_edge("finalize", END)
 

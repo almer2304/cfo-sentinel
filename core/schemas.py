@@ -134,7 +134,22 @@ class CategorizerOutput(BaseModel):
 
 
 # ══════════════════════════════════════════════════════════════════
-# AGENT 3 — Financial Analyst Agent
+# AGENT 1 — Bookkeeper Agent
+# ══════════════════════════════════════════════════════════════════
+
+class BookkeeperOutput(BaseModel):
+    amount:         float = Field(..., gt=0)
+    description:    str
+    accounting_type: Literal["revenue", "operational_expense", "cogs", "asset_purchase", "debt_payment", "receivable", "other"]
+    debit_account:  str
+    credit_account: str
+    is_recurring:   bool = False
+    is_pnl:         bool = Field(..., description="True jika transaksi ini mempengaruhi Laba/Rugi (Pendapatan atau Beban)")
+    confidence:     float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+# ══════════════════════════════════════════════════════════════════
+# AGENT 2 — Financial Analyst Agent
 # ══════════════════════════════════════════════════════════════════
 
 class HealthScore(BaseModel):

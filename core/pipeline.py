@@ -26,17 +26,17 @@ def _run_pipeline(transaction: dict, user_id: int):
 
     print(f"[PIPELINE] >>> Mulai pipeline untuk tx={tx_code}, user={user_id}")
 
-    # ── Agent 1: Classifier ─────────────────────────────────────────
+    # ── Agent 1: Bookkeeper ─────────────────────────────────────────
     t0 = _time.time()
     try:
-        from agents.classifier_agent import run_classifier_agent
-        result_cls = run_classifier_agent(transaction, user_id)
+        from agents.bookkeeper_agent import run_bookkeeper_agent
+        result_book = run_bookkeeper_agent(transaction, user_id)
         print(
-            f"[PIPELINE] Agent 1 Classifier OK ({int((_time.time()-t0)*1000)}ms) "
-            f"→ {result_cls.get('accounting_type')} [{tx_code}]"
+            f"[PIPELINE] Agent 1 Bookkeeper OK ({int((_time.time()-t0)*1000)}ms) "
+            f"→ {result_book.get('accounting_type')} [{tx_code}]"
         )
     except Exception as e:
-        print(f"[PIPELINE] Agent 1 Classifier ERROR: {e}")
+        print(f"[PIPELINE] Agent 1 Bookkeeper ERROR: {e}")
 
     # ── Agent 2: Health ─────────────────────────────────────────────
     t0 = _time.time()
@@ -45,8 +45,7 @@ def _run_pipeline(transaction: dict, user_id: int):
         result_health = run_health_agent(user_id)
         print(
             f"[PIPELINE] Agent 2 Health OK ({int((_time.time()-t0)*1000)}ms) "
-            f"→ score={result_health.get('health_score')}, "
-            f"runway={result_health.get('runway_days')}d [user={user_id}]"
+            f"→ score={result_health.get('health_score')} [user={user_id}]"
         )
     except Exception as e:
         print(f"[PIPELINE] Agent 2 Health ERROR: {e}")

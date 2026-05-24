@@ -49,6 +49,9 @@ def init_new_tables():
         ("is_business_new", "INTEGER DEFAULT 1"),
         ("is_recurring_new", "INTEGER DEFAULT 0"),
         ("is_deleted", "INTEGER DEFAULT 0"),
+        ("raw_input", "TEXT DEFAULT ''"),
+        ("debit_account", "TEXT DEFAULT ''"),
+        ("credit_account", "TEXT DEFAULT ''"),
     ]
     for col_name, col_def in new_cols:
         try:
@@ -121,10 +124,7 @@ def init_new_tables():
 
 def save_transaction_simple(
     user_id: int,
-    type: str,
-    amount: float,
-    description: str,
-    category: str = 'Lain-lain',
+    raw_input: str,
     notes: str = '',
 ) -> dict:
     from core.database import get_connection
@@ -137,16 +137,23 @@ def save_transaction_simple(
     date_only = now_wib.strftime('%Y-%m-%d')
     time_only = now_wib.strftime('%H:%M:%S')
 
+    # Default values sebelum di-analisis agent
+    amount = 0.0
+    tx_type = 'other'
+    description = raw_input[:100]  # Gunakan raw_input sebagai deskripsi awal
+    category = 'Pending'
+
     cursor.execute("""
         INSERT INTO transactions (
             transaction_code, user_id, datetime_wib, date_only,
             time_only, type, amount, description, category, notes,
-            date, is_business, source
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'kasir')
+            date, is_business, source, raw_input,
+            agent_classified, debit_account, credit_account
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'kasir', ?, 0, 'PENDING', 'PENDING')
     """, (
         code, user_id, datetime_wib, date_only,
-        time_only, type, amount, description, category, notes,
-        date_only,
+        time_only, tx_type, amount, description, category, notes,
+        date_only, raw_input
     ))
 
     conn.commit()
@@ -160,11 +167,12 @@ def save_transaction_simple(
         "datetime_wib": datetime_wib,
         "date_only": date_only,
         "time_only": time_only,
-        "type": type,
+        "type": tx_type,
         "amount": amount,
         "description": description,
         "category": category,
         "notes": notes,
+        "raw_input": raw_input
     }
 
 
@@ -228,6 +236,8 @@ def get_financial_summary(user_id: int, date_from: str, date_to: str) -> dict:
     conn = get_connection()
     cursor = conn.cursor()
 
+    # Pastikan kolom baru (debit_account/credit_account) dihandle dengan COALESCE
+    # untuk data lama yang mungkin belum punya nilai ini.
     cursor.execute("""
         SELECT
             COUNT(*)                                    as total_tx,
@@ -241,13 +251,20 @@ def get_financial_summary(user_id: int, date_from: str, date_to: str) -> dict:
                      THEN amount ELSE 0 END)            as cogs,
             SUM(CASE WHEN accounting_type='asset_purchase'
                      THEN amount ELSE 0 END)            as asset_purchase,
+            -- Deteksi Laba Rugi Berbasis Jurnal
+            SUM(CASE WHEN (debit_account IN ('Pendapatan Usaha', 'Pendapatan Lain') OR 
+                           credit_account IN ('Pendapatan Usaha', 'Pendapatan Lain'))
+                     THEN amount ELSE 0 END) as journal_revenue,
+            SUM(CASE WHEN (debit_account LIKE 'Beban%' OR credit_account LIKE 'Beban%' OR
+                           debit_account = 'HPP (Bahan Baku)' OR credit_account = 'HPP (Bahan Baku)')
+                     THEN amount ELSE 0 END) as journal_expense,
             AVG(CASE WHEN type='expense' THEN amount END) as avg_expense_per_tx,
             COUNT(DISTINCT COALESCE(NULLIF(date_only,''), date)) as active_days
         FROM transactions
         WHERE user_id = ?
-          AND COALESCE(NULLIF(date_only,''), date) BETWEEN ? AND ?
+          AND COALESCE(NULLIF(date_only,''), date) >= ?
+          AND COALESCE(NULLIF(date_only,''), date) <= ?
           AND (is_deleted IS NULL OR is_deleted = 0)
-          AND (is_business IS NULL OR is_business = 1)
     """, (user_id, date_from, date_to))
 
     row = cursor.fetchone()
@@ -287,25 +304,32 @@ def get_spending_by_category_efficient(
 
 
 def get_cash_balance(user_id: int) -> float:
-    """Saldo kas = total income - total expense SEMUA WAKTU."""
+    """
+    Hitung saldo kas riil menggunakan logika Double-Entry:
+    Saldo Kas = Total Debit Akun 'Kas' - Total Kredit Akun 'Kas'
+    """
     from core.database import get_connection
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT SUM(CASE WHEN type='income'  THEN amount
-                        WHEN type='expense' THEN -amount
-                        ELSE 0 END) as balance
+        SELECT 
+            SUM(CASE WHEN debit_account = 'Kas' THEN amount ELSE 0 END) as total_debit,
+            SUM(CASE WHEN credit_account = 'Kas' THEN amount ELSE 0 END) as total_credit
         FROM transactions
         WHERE user_id = ?
           AND (is_deleted IS NULL OR is_deleted = 0)
-          AND (is_business IS NULL OR is_business = 1)
+          AND debit_account != 'PENDING' 
+          AND credit_account != 'PENDING'
     """, (user_id,))
 
     row = cursor.fetchone()
     conn.close()
-    return float(row["balance"] or 0)
 
+    debit = row["total_debit"] or 0
+    credit = row["total_credit"] or 0
+    # Pembulatan ke 2 desimal untuk mencegah 'Floating Point Sand' (misal: 0.000000001)
+    return round(float(debit - credit), 2)
 
 def get_transaction_by_code(user_id: int, transaction_code: str) -> dict | None:
     from core.database import get_connection
@@ -324,10 +348,12 @@ def update_transaction(user_id: int, transaction_code: str, data: dict) -> bool:
     from core.database import get_connection
     conn = get_connection()
     cursor = conn.cursor()
+    # Reset akun jurnal agar Agent Bookkeeper memproses ulang (Integritas Buku Besar)
     cursor.execute("""
         UPDATE transactions
         SET amount = ?, description = ?, category = ?,
-            notes = ?, agent_classified = 0
+            notes = ?, agent_classified = 0,
+            debit_account = '', credit_account = ''
         WHERE transaction_code = ? AND user_id = ?
     """, (
         data.get("amount"), data.get("description"),

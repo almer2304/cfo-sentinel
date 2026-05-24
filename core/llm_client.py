@@ -15,36 +15,61 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Konfigurasi per agent ──────────────────────────────────────────
-# max_tokens dinaikkan untuk mencegah JSON terpotong di tengah response.
-# Model qwen3 punya thinking mode yang makan banyak token sebelum JSON,
-# sehingga kita butuh ruang lebih besar untuk konten aktual.
+# max_tokens dioptimalkan sekecil mungkin agar response super cepat (di bawah 3 detik)
+# dan mencegah token terbuang percuma.
 AGENT_CONFIG = {
-    "classifier": {
+    "parser": {
         "model": os.getenv("MODEL_CLASSIFIER", "qwen3.6-flash"),
-        "temperature": 0.1,   # deterministic — klasifikasi akuntansi
-        "max_tokens": 8000,   # dinaikkan: qwen3 butuh token untuk think + JSON
+        "temperature": 0.1,
+        "max_tokens": 1024,   # parser hanya return JSON transaksi pendek
     },
-    "health": {
-        "model": os.getenv("MODEL_HEALTH", "qwen3.6-plus"),
-        "temperature": 0.1,   # deterministic — kalkulasi metrik
-        "max_tokens": 4000,   # dinaikkan: narasi + think block
+    "categorizer": {
+        "model": os.getenv("MODEL_CLASSIFIER", "qwen3.6-flash"),
+        "temperature": 0.1,
+        "max_tokens": 1024,   # categorizer hanya return JSON klasifikasi
+    },
+    "analyst": {
+        "model": os.getenv("MODEL_CLASSIFIER", "qwen3.6-flash"),  # flash untuk kecepatan menulis narasi pendek
+        "temperature": 0.1,
+        "max_tokens": 512,    # narasi dibatasi maksimal 3 kalimat
     },
     "anomaly": {
         "model": os.getenv("MODEL_ANOMALY", "qwen3.6-flash"),
-        "temperature": 0.2,   # sedikit kreatif untuk deteksi pola
-        "max_tokens": 8000,   # dinaikkan: JSON anomali bisa panjang + think block
+        "temperature": 0.1,
+        "max_tokens": 1024,   # JSON deteksi anomali ringkas
     },
-    "advisory": {
-        "model": os.getenv("MODEL_ADVISORY", "qwen3.6-plus"),
-        "temperature": 0.3,   # lebih ekspresif untuk chat
-        "max_tokens": 4000,   # dinaikkan: jawaban chat bisa panjang
+    "scenario": {
+        "model": os.getenv("MODEL_CLASSIFIER", "qwen3.6-flash"),  # flash untuk simulasi cepat
+        "temperature": 0.2,
+        "max_tokens": 1536,   # JSON simulasi skenario
+    },
+    "advisor": {
+        "model": os.getenv("MODEL_ADVISORY", "qwen3.6-plus"),     # plus untuk kualitas saran strategis
+        "temperature": 0.3,
+        "max_tokens": 2048,   # JSON rekomendasi strategi
+    },
+    "classifier": {
+        "model": os.getenv("MODEL_CLASSIFIER", "qwen3.6-flash"),
+        "temperature": 0.1,
+        "max_tokens": 1024,
+    },
+    "bookkeeper": {
+        "model": os.getenv("MODEL_CLASSIFIER", "qwen3.6-flash"),
+        "temperature": 0.1,
+        "max_tokens": 1024,
+    },
+    "health": {
+        "model": os.getenv("MODEL_CLASSIFIER", "qwen3.6-flash"),  # flash untuk kesehatan harian
+        "temperature": 0.1,
+        "max_tokens": 512,
     },
     "report": {
         "model": os.getenv("MODEL_REPORT", "qwen3.6-plus"),
-        "temperature": 0.2,   # ringkasan terstruktur
-        "max_tokens": 4000,   # dinaikkan: ringkasan harian + think block
+        "temperature": 0.2,
+        "max_tokens": 1536,
     },
 }
+
 
 MAX_RETRIES = 3
 RETRY_DELAY = 2
@@ -85,7 +110,7 @@ def call_llm(
     Returns: (response_text, metadata)
     """
     client = _get_client()
-    config = AGENT_CONFIG.get(agent_name, AGENT_CONFIG["advisory"])
+    config = AGENT_CONFIG.get(agent_name, AGENT_CONFIG["advisor"])
     model_name = override_model or config["model"]
 
     metadata = {
@@ -218,6 +243,16 @@ def call_llm_json(
 def _get_fallback_response(agent_name: str) -> str:
     """Rule-based fallback jika LLM call gagal total."""
     fallbacks = {
+        "parser": json.dumps({
+            "transactions": [],
+            "has_ambiguity": False,
+            "ambiguity_notes": ["Parsing otomatis tidak tersedia."]
+        }),
+        "categorizer": json.dumps({
+            "transactions": [],
+            "categories_found": [],
+            "recurring_count": 0
+        }),
         "classifier": json.dumps({
             "accounting_category": "Beban Lain",
             "sub_category": "Tidak Terklasifikasi",
@@ -227,14 +262,30 @@ def _get_fallback_response(agent_name: str) -> str:
             "confidence": 0.3,
             "sak_etap_note": "Klasifikasi fallback — perlu review manual.",
         }),
-        "health": "Analisis otomatis tidak tersedia saat ini. Sistem berjalan dalam mode terbatas.",
+        "analyst": "Analisis otomatis tidak tersedia saat ini. Silakan coba lagi.",
+        "health": "Analisis kesehatan keuangan tidak tersedia saat ini.",
         "anomaly": json.dumps({
             "anomalies": [],
             "overall_risk_level": "LOW",
-            "has_critical": False,
-            "summary": "Deteksi anomali tidak tersedia saat ini.",
+            "analyst_output_valid": True,
+            "trigger_reflection": False,
         }),
-        "advisory": "Maaf, saya sedang tidak bisa menjawab. Coba lagi dalam beberapa saat.",
+        "scenario": json.dumps({
+            "scenario_type": "unavailable",
+            "new_runway": {"minimum": 0, "expected": 0, "maximum": 0, "assumption": ""},
+            "new_health_score": 0,
+            "cuttable_costs": [],
+            "fixed_costs": [],
+            "total_cuttable_amount": 0,
+        }),
+        "advisor": json.dumps({
+            "has_early_warning": False,
+            "action_items": [],
+            "executive_summary": "Saran strategis tidak tersedia saat ini.",
+            "detailed_advice": "",
+            "uncertainty_statement": "",
+            "conflict_detected": False,
+        }),
         "report": json.dumps({
             "period": "",
             "summary": "Laporan tidak tersedia saat ini.",

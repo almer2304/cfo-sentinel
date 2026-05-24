@@ -32,11 +32,8 @@ router = APIRouter(prefix="/transactions", tags=["Transactions"])
 # ─── Request Models ──────────────────────────────────────────────────────────
 
 class TransactionCreate(BaseModel):
-    type: str = Field(..., pattern="^(income|expense)$",
-                      description="income atau expense")
-    amount: float = Field(..., gt=0, description="Jumlah dalam rupiah")
-    description: str = Field(..., min_length=2, max_length=200)
-    category: str = Field(default="Lain-lain", max_length=50)
+    raw_input: str = Field(..., min_length=2, max_length=500, 
+                          description="Input bebas dari user (e.g. 'Beli kopi 20rb')")
     notes: str = Field(default="", max_length=500)
 
 
@@ -55,18 +52,15 @@ async def create_transaction(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Simpan satu transaksi (kasir-style).
-    Pipeline agent otomatis jalan di background.
+    Simpan satu transaksi (input bebas).
+    Pipeline agent otomatis jalan di background untuk memproses jurnal.
     """
     user_id = current_user["id"]
 
     try:
         tx = save_transaction_simple(
             user_id=user_id,
-            type=body.type,
-            amount=body.amount,
-            description=body.description,
-            category=body.category,
+            raw_input=body.raw_input,
             notes=body.notes,
         )
 
@@ -75,14 +69,11 @@ async def create_transaction(
 
         return BaseResponse(
             success=True,
-            message="Transaksi tersimpan. AI sedang menganalisis...",
+            message="Transaksi tersimpan. AI sedang menganalisis jurnal...",
             data={
                 "transaction_code": tx["transaction_code"],
                 "datetime_wib":     tx["datetime_wib"],
-                "type":             tx["type"],
-                "amount":           tx["amount"],
-                "description":      tx["description"],
-                "category":         tx["category"],
+                "raw_input":        tx["raw_input"],
             },
         )
 
