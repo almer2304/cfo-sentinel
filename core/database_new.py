@@ -139,7 +139,7 @@ def save_transaction_simple(
 
     # Default values sebelum di-analisis agent
     amount = 0.0
-    tx_type = 'other'
+    tx_type = 'expense'  # Wajib 'income' atau 'expense' (CHECK constraint DB)
     description = raw_input[:100]  # Gunakan raw_input sebagai deskripsi awal
     category = 'Pending'
 
