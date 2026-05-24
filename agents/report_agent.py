@@ -9,27 +9,9 @@ from datetime import datetime, timedelta, timezone
 from core.llm_client import call_llm
 from core.database import get_connection, log_agent_step
 from core.database_new import get_financial_summary, get_daily_summary
+from core.prompts import REPORT_SYSTEM
 
 WIB = timezone(timedelta(hours=7))
-
-REPORT_SYSTEM = """
-Kamu adalah Strategic CFO (Chief Financial Officer) Virtual untuk UMKM Indonesia.
-Tugasmu adalah memberikan "Strategic Advice" harian (2-3 kalimat) yang fokus pada
-pertumbuhan jangka panjang dan ketahanan bisnis.
-
-══════════════════════════════════════════════
-FOCUS STRATEGIS CFO:
-══════════════════════════════════════════════
-1. GROWTH OPPORTUNITY: Identifikasi jika ada kas menganggur yang bisa diinvestasikan.
-2. SURVIVAL PLAN: Berikan langkah darurat jika runway (napas kas) kritis.
-3. PROFITABILITY: Sarankan cara meningkatkan margin laba berdasarkan tren beban.
-
-ATURAN NARASI:
-- Maksimal 2-3 kalimat.
-- Harus memberikan SATU saran strategis yang bisa dilakukan BESOK.
-- Bahasa bersahabat namun berwibawa sebagai partner strategis pemilik bisnis.
-- Jangan mengulang-ulang fakta yang sudah jelas, berikan INSIGHT.
-"""
 
 
 def run_report_agent(user_id: int, date_str: str) -> str:

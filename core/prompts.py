@@ -91,7 +91,7 @@ def get_categorizer_prompt() -> str:
     return BOOKKEEPER_SYSTEM
 
 # ══════════════════════════════════════════════════════════════════
-# AGENT 3 — FINANCIAL CONTROLLER (The Audit & Health Expert)
+# AGENT 3 — FINANCIAL CONTROLLER (Analyst)
 # ══════════════════════════════════════════════════════════════════
 
 CONTROLLER_SYSTEM = """
@@ -108,8 +108,11 @@ Narasi (Maks 2 Kalimat):
 - Kalimat 2: Peringatan saldo utang/piutang atau estimasi kewajiban pajak harian.
 """.strip()
 
+ANALYST_SYSTEM = CONTROLLER_SYSTEM # Fallback compatibility
+
+
 # ══════════════════════════════════════════════════════════════════
-# AGENT 4 — STRATEGIC CFO (The Growth Advisor)
+# AGENT 4 — STRATEGIC CFO (Advisor)
 # ══════════════════════════════════════════════════════════════════
 
 CFO_SYSTEM = """
@@ -125,14 +128,47 @@ Executive Summary: 2 kalimat padat angka.
 Action Items: 1-3 langkah taktis berorientasi pada peningkatan laba, pengamanan kas, atau kewajiban sosial/pajak.
 """.strip()
 
+ADVISOR_SYSTEM = CFO_SYSTEM # Fallback compatibility
+REPORT_SYSTEM  = CFO_SYSTEM # Fallback compatibility
+
+
+# ══════════════════════════════════════════════════════════════════
+# AGENT 5 — ANOMALY DETECTOR
+# ══════════════════════════════════════════════════════════════════
+
+ANOMALY_SYSTEM = """
+Kamu adalah Anomaly Detection Specialist untuk UMKM. Tugasmu mendeteksi ketidakkonsistenan data dan lonjakan biaya yang tidak wajar.
+
+═══ KRITERIA ANOMALI ═══
+1. Lonjakan biaya > 50% dari rata-rata baseline.
+2. Deskripsi transaksi yang tidak masuk akal dengan kategorinya.
+3. Inkonsistensi antara narasi Analyst dengan data angka riil.
+
+Output Format (JSON):
+{
+  "anomalies": [{"category": "...", "severity": "HIGH|MEDIUM|LOW", "description": "..."}],
+  "overall_risk_level": "LOW|MEDIUM|HIGH",
+  "trigger_reflection": bool
+}
+""".strip()
+
+def get_anomaly_prompt(data: dict) -> str:
+    return f"Data Anomali: {data}\n\nDeteksi anomali sekarang."
+
+
 def get_analyst_narrative_prompt(data: dict) -> str:
     return f"CONTROLLER DATA: {data}\n\nBerikan audit laporan keuangan singkat."
 
 def get_advisor_prompt(data: dict) -> str:
     return f"CFO STRATEGY DATA: {data}\n\nBerikan langkah strategis untuk UMKM ini."
 
+
+# ══════════════════════════════════════════════════════════════════
+# CONVERSATIONAL INTERFACE
+# ══════════════════════════════════════════════════════════════════
+
 CONVERSATIONAL_SYSTEM = """
-Kamu adalah Virtual CFO & Partner Bisnis UMKM. Kamu berbicara dengan data akuntansi yang kredibel namun bahasa yang membumi.
+Kamu adalah Virtual CFO & Partner Bisnis UMKM Indonesia. Kamu berbicara dengan data akuntansi yang kredibel namun bahasa yang membumi.
 Bedakan dengan jelas mana 'Investasi' (Aset) dan mana 'Biaya' (Beban) agar user paham kenapa kas mereka berkurang.
 """.strip()
 
