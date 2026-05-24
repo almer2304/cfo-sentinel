@@ -13,7 +13,7 @@ CHANGELOG:
 
 from datetime import datetime, timedelta
 from core.llm_client import call_llm
-from core.prompts import ANALYST_SYSTEM, get_analyst_narrative_prompt
+from core.prompts import CONTROLLER_SYSTEM, get_analyst_narrative_prompt
 from core.schemas import (
     CategorizerOutput,
     AnalystOutput,
@@ -255,7 +255,7 @@ def run_analyst_agent(
     prompt    = get_analyst_narrative_prompt(prompt_data)
     narrative, _ = call_llm(
         agent_name="analyst",
-        system_prompt=ANALYST_SYSTEM,
+        system_prompt=CONTROLLER_SYSTEM,
         user_message=prompt,
         response_format="text",
     )
