@@ -318,46 +318,60 @@ async def ask_cfo(
     request: ChatRequest,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Tanya CFO Virtual. Konteks dibangun dinamis berdasarkan intent.
+    """
     user_id = current_user["id"]
     session_key = request.session_key or str(uuid.uuid4())
 
-    # Step 1: Deteksi intent — 0 token cost
-    intents = _detect_intent(request.message)
-
-    # Step 2: Build context real-time dari DB — aggregate query, bukan raw data
-    context = _build_context(user_id, current_user, intents, request.message)
-
-    # Step 3: Ambil history percakapan
-    history = get_chat_history(user_id, session_key, limit=15)
-
-    # Step 4: Build messages
-    system_prompt = f"{CHAT_SYSTEM}\n\nDATA KEUANGAN REAL-TIME:\n{context}"
-    messages = [{"role": "system", "content": system_prompt}]
-    for h in history:
-        messages.append({"role": h["role"], "content": h["content"]})
-    messages.append({"role": "user", "content": request.message})
-
-    # Simpan pesan user
-    save_chat_message(user_id, session_key, "user", request.message)
-
     try:
-        from core.llm_client import _get_client, AGENT_CONFIG
-        config = AGENT_CONFIG.get("advisory", {})
-        client = _get_client()
+        # Step 1: Deteksi intent — 0 token cost
+        intents = _detect_intent(request.message)
 
-        response = client.chat.completions.create(
-            model=config.get("model", "qwen/qwen3-6b-plus"),
-            messages=messages,
-            temperature=config.get("temperature", 0.3),
-            max_tokens=config.get("max_tokens", 800),
+        # Step 2: Build context real-time dari DB
+        context = _build_context(user_id, current_user, intents, request.message)
+
+        # Step 3: Ambil history percakapan
+        history_rows = get_chat_history(user_id, session_key, limit=10)
+        history_msgs = []
+        for h in history_rows:
+            history_msgs.append({"role": h["role"], "content": h["content"]})
+
+        # Step 4: Simpan pesan user (dalam try agar safe)
+        save_chat_message(user_id, session_key, "user", request.message)
+
+        # Step 5: Panggil LLM menggunakan wrapper standar
+        from core.llm_client import call_llm
+        from core.prompts import get_conversational_prompt
+        
+        system_prompt = get_conversational_prompt(context)
+        
+        answer, meta = call_llm(
+            agent_name="advisor", # Gunakan config advisor agar lebih cerdas
+            system_prompt=system_prompt,
+            user_message=request.message,
+            conversation_history=history_msgs,
+            response_format="text"
         )
-        answer = response.choices[0].message.content or ""
+
+        if not answer:
+            answer = "Maaf, saya sedang sulit berpikir. Bisa ulangi pertanyaannya?"
+
+        # Step 6: Simpan jawaban assistant
         save_chat_message(user_id, session_key, "assistant", answer)
 
-        return ChatResponse(success=True, answer=answer, session_key=session_key)
+        return ChatResponse(
+            success=True, 
+            answer=answer, 
+            session_key=session_key
+        )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Chat gagal: {str(e)}")
+        print(f"[CHAT ERROR] {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Chat gagal diproses: {str(e)}"
+        )
 
 
 # ─── History & Session Endpoints ─────────────────────────────────────────────
