@@ -11,6 +11,7 @@ from core.database import get_connection, log_agent_step
 from core.database_new import (
     get_financial_summary, get_cash_balance,
 )
+from core.finance_rules import estimate_health_score, safe_finance_narrative
 
 WIB = timezone(timedelta(hours=7))
 
@@ -35,37 +36,7 @@ ATURAN NARASI:
 
 
 def compute_health_score(summary: dict, cash_balance: float) -> float:
-    income  = summary.get("total_income", 0) or 0
-    expense = summary.get("total_expense", 0) or 0
-    actual_expense = (
-        (summary.get("operational_expense", 0) or 0) +
-        (summary.get("cogs", 0) or 0)
-    )
-
-    # Komponen 1: Gross margin (bobot 30%)
-    if income > 0:
-        margin = max(0, (income - actual_expense) / income * 100)
-        margin_score = min(30, (margin / 30) * 30)
-    else:
-        margin_score = 0
-
-    # Komponen 2: Runway (bobot 35%)
-    burn_30d = expense
-    if burn_30d > 0 and cash_balance > 0:
-        runway = (cash_balance / burn_30d) * 30
-    else:
-        runway = 0 if cash_balance <= 0 else 90
-    runway_score = min(35, (runway / 60) * 35)
-
-    # Komponen 3: Cash flow positif (bobot 25%)
-    net = income - expense
-    cashflow_score = 25 if net >= 0 else max(0, 25 + (net / max(expense, 1)) * 25)
-
-    # Komponen 4: Ada transaksi (bobot 10%)
-    activity_score = 10 if (summary.get("total_tx", 0) or 0) > 0 else 0
-
-    total = margin_score + runway_score + cashflow_score + activity_score
-    return round(min(100, max(0, total)), 1)
+    return estimate_health_score(summary, cash_balance)
 
 
 def run_health_agent(user_id: int) -> dict:
@@ -106,12 +77,21 @@ def run_health_agent(user_id: int) -> dict:
         f"Runway: {runway} hari"
     )
 
-    narrative, _ = call_llm(
-        agent_name="health",
-        system_prompt=HEALTH_SYSTEM,
-        user_message=f"Buat narasi singkat kondisi keuangan:\n{data_str}",
-        response_format="text",
+    fallback_narrative = safe_finance_narrative(
+        financial, cash_balance, health_score, runway
     )
+    try:
+        narrative, _ = call_llm(
+            agent_name="health",
+            system_prompt=HEALTH_SYSTEM,
+            user_message=f"Buat narasi singkat kondisi keuangan:\n{data_str}",
+            response_format="text",
+        )
+    except Exception as e:
+        print(f"[Health Agent] LLM fallback: {e}")
+        narrative = fallback_narrative
+
+    narrative = (narrative or fallback_narrative).strip()
 
     # Simpan ke daily_summaries (Update dengan data TERBARU harian)
     conn = get_connection()

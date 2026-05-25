@@ -23,6 +23,7 @@ from core.schemas import (
 )
 from core.memory import get_industry_health_avg, get_monthly_snapshots
 from core.database import get_transactions
+from core.finance_rules import safe_finance_narrative
 
 def _safe_get(obj, key, default=None):
     if hasattr(obj, key):
@@ -253,12 +254,28 @@ def run_analyst_agent(
     }
 
     prompt    = get_analyst_narrative_prompt(prompt_data)
-    narrative, _ = call_llm(
-        agent_name="analyst",
-        system_prompt=CONTROLLER_SYSTEM,
-        user_message=prompt,
-        response_format="text",
+    fallback_narrative = safe_finance_narrative(
+        {
+            "total_income": total_income,
+            "total_expense": total_expense,
+            "journal_revenue": total_income,
+            "journal_expense": actual_beban,
+            "total_tx": len(categorizer_output.transactions),
+            "active_days": active_days,
+        },
+        cash_balance=cash_balance,
+        health_score=hs_score,
+        runway_days=expected_runway,
     )
+    try:
+        narrative, _ = call_llm(
+            agent_name="analyst",
+            system_prompt=CONTROLLER_SYSTEM,
+            user_message=prompt,
+            response_format="text",
+        )
+    except Exception:
+        narrative = fallback_narrative
 
     # ── Flag untuk Orchestrator ───────────────────────────────────
     # Jika kondisi sangat kritis, tandai untuk trigger reflection
@@ -287,7 +304,7 @@ def run_analyst_agent(
         revenue_consistency=revenue_consistency,
         health_score=health_score,
         forecast_30d=forecast,
-        narrative=narrative or "Analisis keuangan selesai.",
+        narrative=narrative or fallback_narrative,
         business_type=business_type,
         needs_reflection=needs_reflection,
         reflection_note=(

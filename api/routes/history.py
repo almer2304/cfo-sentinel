@@ -48,7 +48,8 @@ async def get_history(
         # Untuk daily summary, kita ambil anomali berdasarkan tanggal
         date_str = row["session_id"].replace("DAILY-", "")
         cursor.execute("""
-            SELECT category, severity, description, deviation_pct
+            SELECT category, severity, description, deviation_pct,
+                   current_amount, baseline_amount, suggested_action
             FROM transaction_anomalies
             WHERE user_id = ? AND date(detected_at) = ?
         """, (user_id, date_str))
@@ -69,10 +70,11 @@ async def get_history(
                 AnomalyData(
                     category=a["category"],
                     severity=a["severity"],
-                    current_amount=a.get("current_amount", 0),
-                    baseline_amount=a.get("baseline_amount", 0),
+                    current_amount=a["current_amount"] or 0,
+                    baseline_amount=a["baseline_amount"] or 0,
                     deviation_pct=a["deviation_pct"],
-                    description=a["description"]
+                    description=a["description"],
+                    suggested_action=a["suggested_action"] or "",
                 ) for a in anoms
             ],
             action_items=[] # Advisor data for daily is inside narrative

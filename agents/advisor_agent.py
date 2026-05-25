@@ -209,11 +209,56 @@ def run_advisor_agent(
     user_prompt = get_advisor_prompt(prompt_data)
 
     # ── LLM Call ──────────────────────────────────────────────────
-    parsed_json, metadata = call_llm_json(
-        agent_name="advisor",
-        system_prompt=ADVISOR_SYSTEM,
-        user_message=user_prompt,
-    )
+    try:
+        parsed_json, _ = call_llm_json(
+            agent_name="advisor",
+            system_prompt=ADVISOR_SYSTEM,
+            user_message=user_prompt,
+        )
+    except Exception:
+        parsed_json = {}
+
+    if not parsed_json:
+        runway = analyst_output.runway_days.expected
+        urgency = "IMMEDIATE" if runway < 14 or anomaly_output.overall_risk_level in ("HIGH", "CRITICAL") else "THIS_WEEK"
+        parsed_json = {
+            "has_early_warning": runway < 30 or anomaly_output.overall_risk_level in ("HIGH", "CRITICAL"),
+            "early_warning": {
+                "message": f"Runway kas sekitar {runway:.0f} hari; jaga pengeluaran sampai arus kas stabil.",
+                "days_until_crisis": int(runway) if runway > 0 else 0,
+                "confidence": {
+                    "minimum": max(0, runway * 0.8),
+                    "expected": runway,
+                    "maximum": runway * 1.2,
+                    "assumption": "Fallback deterministik dari burn rate saat ini.",
+                },
+                "trigger_condition": "Runway pendek atau risk anomaly tinggi.",
+            },
+            "action_items": [
+                {
+                    "priority": 1,
+                    "title": "Amankan kas operasional",
+                    "description": "Tunda belanja non-esensial dan prioritaskan transaksi yang langsung menghasilkan kas masuk.",
+                    "urgency": urgency,
+                    "estimated_impact": "Mengurangi burn rate harian.",
+                    "category": "cashflow",
+                },
+                {
+                    "priority": 2,
+                    "title": "Audit kategori biaya terbesar",
+                    "description": "Cek bukti transaksi dan bandingkan dengan kebutuhan operasional minggu ini.",
+                    "urgency": "THIS_WEEK",
+                    "estimated_impact": "Menekan pemborosan dan salah klasifikasi.",
+                    "category": "cost_control",
+                },
+            ],
+            "executive_summary": (
+                f"Health score {analyst_output.health_score.current:.0f}/100 dengan runway "
+                f"sekitar {runway:.0f} hari. Fokus utama adalah menjaga kas dan menekan biaya yang tidak langsung mendorong penjualan."
+            ),
+            "detailed_advice": "Rekomendasi ini dibuat oleh fallback rules engine karena LLM advisor tidak tersedia.",
+            "uncertainty_statement": "Analisis bergantung pada transaksi yang sudah dicatat dan diklasifikasi.",
+        }
 
     # ── Parse action_items ─────────────────────────────────────────
     action_items: list[ActionItem] = []

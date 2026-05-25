@@ -113,9 +113,10 @@ def _build_context(user_id: int, user: dict, intents: list[str], message: str) -
         f"Tanggal sekarang: {today} WIB",
         "",
         "CATATAN TERMINOLOGI:",
-        "- Pemasukan = Penjualan (keduanya sama, yaitu uang masuk/income)",
-        "- Pengeluaran = Pembelian (keduanya sama, yaitu uang keluar/expense)",
-        "- Saldo = Pemasukan - Pengeluaran (selisih/laba kotor)",
+        "- Pemasukan kas = uang yang benar-benar masuk ke Kas",
+        "- Pengeluaran kas = uang yang benar-benar keluar dari Kas",
+        "- Penjualan/Pendapatan dan Beban dihitung dari jurnal, bukan sekadar arus kas",
+        "- Saldo Kas dihitung dari akun Kas: debit Kas - kredit Kas",
     ]
 
     # Selalu sertakan summary ringkas bulan ini dan HARI INI
@@ -144,7 +145,7 @@ def _build_context(user_id: int, user: dict, intents: list[str], message: str) -
         f"\n=== RINGKASAN BULAN INI ({month_start} s/d {today}) ==="
         f"\n- Total Pemasukan/Penjualan (income): Rp {income:,.0f}"
         f"\n- Total Pengeluaran/Pembelian (expense): Rp {expense:,.0f}"
-        f"\n- Selisih / Laba Kotor: Rp {net:,.0f}"
+        f"\n- Arus Kas Bersih: Rp {net:,.0f}"
         f"\n- Saldo Kas (semua waktu): Rp {cash_balance:,.0f}"
         f"\n- Jumlah Transaksi Bulan Ini: {tx_count}"
         f"\n- Rata-rata pengeluaran per hari: Rp {burn_day:,.0f}"
@@ -156,17 +157,18 @@ def _build_context(user_id: int, user: dict, intents: list[str], message: str) -
         ops_exp = summary.get("operational_expense", 0) or 0
         cogs    = summary.get("cogs", 0) or 0
         asset   = summary.get("asset_purchase", 0) or 0
+        revenue = summary.get("journal_revenue", 0) or 0
         actual_expense = ops_exp + cogs
-        profit  = income - actual_expense
-        margin  = (profit / income * 100) if income > 0 else 0
+        profit  = revenue - actual_expense
+        margin  = (profit / revenue * 100) if revenue > 0 else 0
         parts.append(
             f"\n=== ANALISIS LABA-RUGI ==="
-            f"\n- Pendapatan: Rp {income:,.0f}"
+            f"\n- Pendapatan/Jurnal Penjualan: Rp {revenue:,.0f}"
             f"\n- Beban Operasional (sewa/listrik/gaji): Rp {ops_exp:,.0f}"
             f"\n- HPP/COGS: Rp {cogs:,.0f}"
             f"\n- Total Beban Aktual: Rp {actual_expense:,.0f}"
             f"\n- Pembelian Aset/Stok: Rp {asset:,.0f} (ini BUKAN beban langsung)"
-            f"\n- Laba Kotor: Rp {profit:,.0f}"
+            f"\n- Laba Operasional Estimasi: Rp {profit:,.0f}"
             f"\n- Margin: {margin:.1f}%"
         )
 
@@ -303,10 +305,10 @@ CARA MENJAWAB:
 - Jika user tanya tentang transaksi spesifik, kutip datanya
 
 TERMINOLOGI YANG BENAR:
-- "Pemasukan" dan "Penjualan" adalah hal yang SAMA (uang masuk/income) ✅
-- "Pengeluaran" dan "Pembelian" adalah hal yang SAMA (uang keluar/expense) ✅
-- Ini adalah prinsip akuntansi yang benar — jangan bingungkan user
-- Saldo = Total Pemasukan − Total Pengeluaran = Selisih/Laba Kotor
+- Pemasukan kas adalah uang yang benar-benar masuk ke akun Kas.
+- Pengeluaran kas adalah uang yang benar-benar keluar dari akun Kas.
+- Penjualan/Pendapatan dan Beban memakai jurnal akuntansi.
+- Saldo Kas = debit Kas - kredit Kas. Jangan sebut ini laba.
 
 JIKA BELUM ADA DATA:
 Katakan jujur bahwa belum ada transaksi tercatat, dan minta user

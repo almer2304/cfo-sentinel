@@ -8,8 +8,9 @@ import time
 from datetime import datetime, timedelta, timezone
 from core.llm_client import call_llm
 from core.database import get_connection, log_agent_step
-from core.database_new import get_financial_summary, get_daily_summary
+from core.database_new import get_financial_summary, get_daily_summary, get_cash_balance
 from core.prompts import REPORT_SYSTEM
+from core.finance_rules import safe_finance_narrative
 
 WIB = timezone(timedelta(hours=7))
 
@@ -34,6 +35,7 @@ def run_report_agent(user_id: int, date_str: str) -> str:
     health_score = daily.get("health_score", 0) if daily else 0
     runway_days  = daily.get("runway_days", 0) if daily else 0
     anomaly_count = daily.get("anomaly_count", 0) if daily else 0
+    cash_balance = get_cash_balance(user_id)
 
     # Jika tidak ada transaksi hari ini, skip LLM call
     if tx_count == 0:
@@ -53,19 +55,29 @@ def run_report_agent(user_id: int, date_str: str) -> str:
         f"Anomali terdeteksi: {anomaly_count}"
     )
 
-    narrative, _ = call_llm(
-        agent_name="report",
-        system_prompt=REPORT_SYSTEM,
-        user_message=f"Buat ringkasan harian berdasarkan data berikut:\n{data_str}",
-        response_format="text",
+    fallback_narrative = safe_finance_narrative(
+        summary,
+        cash_balance=cash_balance,
+        health_score=health_score,
+        runway_days=runway_days,
     )
+    try:
+        narrative, _ = call_llm(
+            agent_name="report",
+            system_prompt=REPORT_SYSTEM,
+            user_message=f"Buat ringkasan harian berdasarkan data berikut:\n{data_str}",
+            response_format="text",
+        )
+    except Exception as e:
+        print(f"[Report Agent] LLM fallback: {e}")
+        narrative = fallback_narrative
 
     # Bersihkan jika ada think block yang lolos (defensive)
     import re
     if narrative:
         narrative = re.sub(r'<think>.*?</think>', '', narrative, flags=re.DOTALL).strip()
 
-    narrative = narrative or "Analisis harian selesai diproses."
+    narrative = narrative or fallback_narrative or "Analisis harian selesai diproses."
 
     # Update kolom agent_narrative di daily_summaries
     _update_narrative(user_id, date_str, narrative)

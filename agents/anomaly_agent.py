@@ -66,11 +66,52 @@ def run_anomaly_agent(
     
     prompt = get_anomaly_prompt(prompt_data)
     
-    parsed_json, metadata = call_llm_json(
-        agent_name="anomaly",
-        system_prompt=ANOMALY_SYSTEM,
-        user_message=prompt
-    )
+    try:
+        parsed_json, _ = call_llm_json(
+            agent_name="anomaly",
+            system_prompt=ANOMALY_SYSTEM,
+            user_message=prompt
+        )
+    except Exception:
+        parsed_json = {}
+
+    if not parsed_json:
+        baseline_map = {b["category"]: b for b in baselines}
+        fallback_anomalies = []
+        for item in current_spending:
+            category = item["category"]
+            current = item["total"]
+            baseline = baseline_map.get(category, {})
+            avg = baseline.get("avg_monthly", 0) or 0
+            if avg <= 0:
+                continue
+            deviation = ((current - avg) / avg) * 100
+            abs_dev = abs(deviation)
+            if abs_dev < 50:
+                continue
+            severity = "HIGH" if abs_dev >= 100 else "MEDIUM"
+            fallback_anomalies.append({
+                "category": category,
+                "severity": severity,
+                "current_amount": current,
+                "baseline_amount": avg,
+                "deviation_pct": round(deviation, 1),
+                "description": (
+                    f"{category} menyimpang {abs_dev:.0f}% dari baseline "
+                    f"Rp {avg:,.0f}."
+                ),
+                "suggested_action": "Cek bukti transaksi dan validasi apakah biaya ini memang perlu.",
+            })
+        parsed_json = {
+            "anomalies": fallback_anomalies,
+            "analyst_output_valid": True,
+            "trigger_reflection": False,
+            "overall_risk_level": (
+                "HIGH" if any(a["severity"] == "HIGH" for a in fallback_anomalies)
+                else "MEDIUM" if fallback_anomalies
+                else "LOW"
+            ),
+        }
     
     anomalies = parsed_json.get("anomalies", [])
     high_severity_count = sum(1 for a in anomalies if a.get("severity") == "HIGH")

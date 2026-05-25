@@ -1,171 +1,123 @@
 """
-agents/anomaly_agent.py — AGENT 3 (NEW VERSION)
-Deteksi anomali dengan membandingkan current vs baseline historis.
-Dipanggil otomatis dari background pipeline.
+agents/anomaly_agent_new.py - Agent 3
+
+Deteksi anomali deterministik. LLM tidak dipakai sebagai sumber keputusan
+risiko karena kategori, deviasi, dan severity harus reproducible.
 """
 
 import time
 from datetime import datetime, timedelta, timezone
-from core.llm_client import call_llm_json
+
 from core.database import get_connection, log_agent_step
 from core.database_new import get_spending_by_category_efficient
 
 WIB = timezone(timedelta(hours=7))
 
-ANOMALY_SYSTEM = """\
-Kamu adalah Risk Analyst senior dengan keahlian mendalam di akuntansi UMKM \
-Indonesia (SAK-EMKM). Pengalamanmu 15 tahun menganalisis pola keuangan \
-usaha kecil: warung, toko kelontong, UMKM F&B, jasa, dan perdagangan.
 
-═══════════════════════════════════════════
-TUGASMU
-═══════════════════════════════════════════
-Bandingkan pengeluaran bulan ini PER KATEGORI dengan rata-rata baseline \
-3 bulan sebelumnya. Identifikasi anomali yang signifikan secara bisnis.
+def _severity_from_deviation(deviation_pct: float, current_amount: float) -> str | None:
+    dev = abs(deviation_pct)
+    if dev >= 100 or current_amount >= 10_000_000:
+        return "HIGH"
+    if dev >= 50 or current_amount >= 5_000_000:
+        return "MEDIUM"
+    if dev >= 25:
+        return "LOW"
+    return None
 
-═══════════════════════════════════════════
-ATURAN ANALISIS
-═══════════════════════════════════════════
-1. Analisis SETIAP kategori secara terpisah.
-   - Hitung deviasi = ((current - baseline) / baseline) × 100%.
-   - Jika baseline = 0 dan current > 0, ini kategori baru → LOW severity \
-     kecuali nominalnya besar (>Rp 5 juta → MEDIUM).
 
-2. Jenis anomali:
-   - LONJAKAN (current >> baseline): kemungkinan pemborosan, fraud, \
-     atau kebutuhan musiman yang sah.
-   - PENURUNAN TAJAM (current << baseline): kemungkinan bisnis melambat, \
-     supplier hilang, atau efisiensi berhasil.
+def _description(category: str, current: float, baseline: float, deviation: float) -> str:
+    if baseline <= 0:
+        return f"Kategori {category} muncul bulan ini sebesar Rp {current:,.0f} tanpa baseline historis."
+    direction = "naik" if deviation > 0 else "turun"
+    return (
+        f"Pengeluaran {category} {direction} {abs(deviation):.0f}% dari baseline "
+        f"Rp {baseline:,.0f} menjadi Rp {current:,.0f}."
+    )
 
-3. Threshold severity berdasarkan DEVIASI ABSOLUT:
-   - HIGH:   |deviasi| > 100%  (naik/turun lebih dari 2× lipat)
-   - MEDIUM: |deviasi| 50–100%
-   - LOW:    |deviasi| 25–50%
-   - Di bawah 25%: BUKAN anomali, jangan masukkan.
 
-4. Konteks musiman Indonesia (pertimbangkan sebelum menandai anomali):
-   - Ramadan & Lebaran (bervariasi): lonjakan bahan baku F&B, THR, \
-     parcel → wajar naik 50–150%.
-   - Juli–Agustus: libur sekolah, pariwisata naik.
-   - November–Desember: tutup buku, belanja akhir tahun, stok Natal.
-   - Januari: penjualan turun pasca liburan, biaya izin/pajak tahunan.
-   Jika lonjakan sesuai pola musiman, turunkan severity satu tingkat \
-   dan jelaskan di root_cause_hypothesis.
+def _action(category: str, severity: str, deviation: float) -> str:
+    if severity == "HIGH":
+        return "Cek bukti transaksi hari ini dan tahan pengeluaran sejenis sampai penyebabnya jelas."
+    if deviation > 0:
+        return f"Bandingkan {category} dengan kebutuhan operasional minggu ini; potong yang tidak langsung menghasilkan penjualan."
+    return f"Pastikan penurunan {category} bukan karena stok/supplier yang menghambat penjualan."
 
-5. Jika data baseline kosong atau ini bulan pertama → JANGAN buat anomali, \
-   kembalikan list kosong.
 
-═══════════════════════════════════════════
-FORMAT OUTPUT — JSON SAJA, TANPA TEKS LAIN
-═══════════════════════════════════════════
-{
-  "anomalies": [
-    {
-      "category": "nama kategori PERSIS dari data input",
-      "severity": "HIGH|MEDIUM|LOW",
-      "current_amount": 2000000,
-      "baseline_amount": 500000,
-      "deviation_pct": 300.0,
-      "description": "penjelasan singkat dan jelas dalam Bahasa Indonesia",
-      "root_cause_hypothesis": "kemungkinan penyebab berdasarkan konteks UMKM",
-      "suggested_action": "saran konkret 1–2 kalimat yang bisa langsung dilakukan"
-    }
-  ],
-  "overall_risk": "LOW|MEDIUM|HIGH|CRITICAL"
-}
-
-Aturan overall_risk:
-- CRITICAL: ada ≥1 anomali HIGH dengan nominal > Rp 10 juta
-- HIGH:     ada ≥1 anomali HIGH
-- MEDIUM:   ada anomali MEDIUM tapi tidak ada HIGH
-- LOW:      hanya anomali LOW atau tidak ada anomali
-"""
+def _overall_risk(anomalies: list[dict]) -> str:
+    if any(a["severity"] == "HIGH" and a["current_amount"] >= 10_000_000 for a in anomalies):
+        return "CRITICAL"
+    if any(a["severity"] == "HIGH" for a in anomalies):
+        return "HIGH"
+    if any(a["severity"] == "MEDIUM" for a in anomalies):
+        return "MEDIUM"
+    return "LOW"
 
 
 def run_anomaly_agent(user_id: int) -> dict:
     """
-    Agent 3: Deteksi anomali dengan membanding current vs baseline.
-    2 query aggregate + 1 LLM call.
+    Agent 3: current month spending vs rolling 90-day baseline.
     """
     start = time.time()
+    now = datetime.now(WIB)
+    today = now.strftime("%Y-%m-%d")
+    month_start = now.strftime("%Y-%m-01")
+    three_months_ago = (now - timedelta(days=90)).strftime("%Y-%m-%d")
+    last_month_end = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    now     = datetime.now(WIB)
-    today   = now.strftime('%Y-%m-%d')
-    m_start = now.strftime('%Y-%m-01')
+    current = get_spending_by_category_efficient(user_id, month_start, today)
+    baseline_raw = get_spending_by_category_efficient(user_id, three_months_ago, last_month_end)
 
-    three_months_ago = (now - timedelta(days=90)).strftime('%Y-%m-%d')
-    last_month_end   = (now.replace(day=1) - timedelta(days=1)).strftime('%Y-%m-%d')
-
-    current = get_spending_by_category_efficient(user_id, m_start, today)
-    baseline_raw = get_spending_by_category_efficient(
-        user_id, three_months_ago, last_month_end
-    )
-
-    # Jika data baseline kosong, kita tetap jalankan untuk deteksi 'Kategori Baru'
-    if not current:
-        result = {"anomalies": [], "overall_risk": "LOW"}
-        duration = int((time.time() - start) * 1000)
-        return result
-
-    # Bangun baseline map
     baseline_map = {
-        b["category"]: b["total"] / max(3, 1) # Support min 1 month baseline
+        b["category"]: (b["total"] or 0) / 3
         for b in baseline_raw
-    } if baseline_raw else {}
+    }
 
-    # Siapkan data perbandingan
-    comparison_lines = []
-    for c in current[:15]:
-        cat = c["category"]
-        cur_amt = c["total"]
-        base_amt = baseline_map.get(cat, 0)
-        
-        if base_amt > 0:
-            dev = ((cur_amt - base_amt) / base_amt) * 100
-            label = f"deviasi {dev:+.1f}%"
+    anomalies: list[dict] = []
+    for row in current:
+        category = row["category"]
+        current_amount = row["total"] or 0
+        baseline_amount = baseline_map.get(category, 0)
+
+        if baseline_amount > 0:
+            deviation = ((current_amount - baseline_amount) / baseline_amount) * 100
+            severity = _severity_from_deviation(deviation, current_amount)
         else:
-            dev = 100.0
-            label = "KATEGORI BARU"
-            
-        comparison_lines.append(f"• {cat}: Rp {cur_amt:,.0f} ({label})")
+            deviation = 100.0 if current_amount > 0 else 0.0
+            # Bulan pertama: hanya flag kategori baru jika nominalnya material.
+            severity = "MEDIUM" if current_amount >= 5_000_000 else None
 
-    bulan_tahun = now.strftime('%B %Y')
-    prompt = (
-        f"Periode: {bulan_tahun}\n"
-        f"Tipe Bisnis: kuliner\n\n"
-        f"Daftar Pengeluaran:\n"
-        + "\n".join(comparison_lines)
-        + "\n\nTugas: Deteksi anomali. Cari kategori yang tidak relevan dengan tipe bisnis (misal: Netflix di bisnis kuliner) atau pengeluaran baru yang mencurigakan."
+        if not severity:
+            continue
+
+        anomalies.append({
+            "category": category,
+            "severity": severity,
+            "current_amount": round(current_amount, 2),
+            "baseline_amount": round(baseline_amount, 2),
+            "deviation_pct": round(deviation, 1),
+            "description": _description(category, current_amount, baseline_amount, deviation),
+            "suggested_action": _action(category, severity, deviation),
+        })
+
+    anomalies.sort(
+        key=lambda a: (
+            {"HIGH": 0, "MEDIUM": 1, "LOW": 2}.get(a["severity"], 3),
+            -abs(a["deviation_pct"]),
+            -a["current_amount"],
+        )
     )
+    risk = _overall_risk(anomalies)
 
-    result, _ = call_llm_json(
-        agent_name="anomaly",
-        system_prompt=ANOMALY_SYSTEM,
-        user_message=prompt,
-    )
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        # Hindari duplikasi karena pipeline berjalan setiap transaksi.
+        cursor.execute("""
+            DELETE FROM transaction_anomalies
+            WHERE user_id = ? AND date(detected_at) = ? AND is_resolved = 0
+        """, (user_id, today))
 
-    anomalies = result.get("anomalies", []) if result else []
-
-    # Simpan anomali ke database
-    if anomalies:
-        conn = get_connection()
-        cursor = conn.cursor()
         for a in anomalies:
-            # Gunakan data per-kategori dari respons LLM
-            cat = a.get("category", "Lain-lain")
-
-            # Hitung ulang deviation dari data aktual sebagai validasi
-            current_match = next(
-                (c for c in current if c["category"] == cat), None
-            )
-            current_amt  = a.get("current_amount", current_match["total"] if current_match else 0)
-            baseline_amt = a.get("baseline_amount", baseline_map.get(cat, 0))
-            if baseline_amt > 0:
-                deviation = ((current_amt - baseline_amt) / baseline_amt) * 100
-            else:
-                deviation = 100.0 if current_amt > 0 else 0.0
-
-            # BUG 1 FIX: SQL INSERT sekarang lengkap dengan VALUES clause
             cursor.execute("""
                 INSERT INTO transaction_anomalies (
                     user_id, category, severity,
@@ -174,38 +126,37 @@ def run_anomaly_agent(user_id: int) -> dict:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 user_id,
-                cat,
-                a.get("severity", "LOW"),
-                round(current_amt, 2),
-                round(baseline_amt, 2),
-                round(deviation, 1),
-                a.get("description", ""),
-                a.get("suggested_action", ""),
+                a["category"],
+                a["severity"],
+                a["current_amount"],
+                a["baseline_amount"],
+                a["deviation_pct"],
+                a["description"],
+                a["suggested_action"],
             ))
 
-        has_critical = any(a.get("severity") == "HIGH" for a in anomalies)
+        has_critical = risk in {"HIGH", "CRITICAL"}
         cursor.execute("""
             UPDATE daily_summaries
-            SET anomaly_count        = ?,
+            SET anomaly_count = ?,
                 has_critical_anomaly = ?
             WHERE user_id = ? AND date_only = ?
         """, (len(anomalies), 1 if has_critical else 0, user_id, today))
-
         conn.commit()
+    finally:
         conn.close()
 
     duration = int((time.time() - start) * 1000)
-    overall_risk = result.get("overall_risk", "LOW") if result else "LOW"
     log_agent_step(
         session_id=f"anomaly-{user_id}-{today}",
         agent_name="anomaly",
         step=3,
-        input_summary=f"Current: {len(current)} kategori, Baseline: {len(baseline_raw)} kategori",
-        reasoning=f"Found {len(anomalies)} anomalies. Risk: {overall_risk}",
+        input_summary=f"Current: {len(current)} kategori, baseline: {len(baseline_raw)} kategori",
+        reasoning=f"Deterministic deviation check. Found {len(anomalies)} anomalies. Risk: {risk}",
         output_summary=str(anomalies[:2]),
         duration_ms=duration,
-        status="success" if result else "fallback",
+        status="success",
         user_id=user_id,
     )
 
-    return result or {"anomalies": [], "overall_risk": "LOW"}
+    return {"anomalies": anomalies, "overall_risk": risk}

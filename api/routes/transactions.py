@@ -22,6 +22,7 @@ from core.database_new import (
     get_unresolved_anomalies,
 )
 from core.pipeline import trigger_pipeline
+from core.finance_rules import estimate_health_score, safe_finance_narrative
 from datetime import datetime, timezone, timedelta
 
 WIB = timezone(timedelta(hours=7))
@@ -144,15 +145,16 @@ async def get_transactions_dashboard(
         active_days  = max(financial.get("active_days", 1) or 1, 1)
         burn_day     = expense / active_days
         runway       = round(cash_balance / burn_day) if burn_day > 0 else 999
+        fallback_score = estimate_health_score(financial, cash_balance)
 
         summary_today = {
-            "health_score":    0,
+            "health_score":    fallback_score,
             "runway_days":     runway,
             "burn_rate_daily": burn_day,
             "total_income":    income,
             "total_expense":   expense,
             "net_cashflow":    income - expense,
-            "agent_narrative": "Belum ada analisis hari ini. Tambah transaksi untuk memulai.",
+            "agent_narrative": safe_finance_narrative(financial, cash_balance, fallback_score, runway),
             "anomaly_count":   0,
             "has_critical_anomaly": 0,
         }

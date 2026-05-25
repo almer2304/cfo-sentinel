@@ -1,55 +1,58 @@
 """
 agents/categorizer_agent.py
-CFO Sentinel — Categorizer Agent
+CFO Sentinel - Categorizer Agent
+
+Versi lama meminta LLM mengembalikan field yang tidak cocok dengan
+CategorizedTransaction. Di sini kategorisasi dibuat deterministik dan konsisten
+dengan rules engine v2.
 """
 
-from core.llm_client import call_llm_json
-from core.prompts import get_categorizer_prompt
+from core.finance_rules import classify_raw_transaction
 from core.schemas import ParserOutput, CategorizerOutput
+
+
+def _to_categorized(tx) -> dict:
+    raw_hint = f"{tx.description} {tx.amount:.0f}"
+    classified = classify_raw_transaction(raw_hint)
+    entry = (classified.get("transactions") or [{}])[0]
+
+    category = entry.get("category", "Lain-lain")
+    accounting_type = entry.get("accounting_type", "other")
+    if tx.type == "income" and entry.get("type") != "income":
+        category = "Pendapatan Usaha"
+        accounting_type = "revenue"
+
+    return {
+        "date": tx.date,
+        "amount": tx.amount,
+        "type": tx.type,
+        "description": tx.description,
+        "is_business": tx.is_business,
+        "confidence": tx.confidence,
+        "category": category,
+        "sub_category": entry.get("sub_category", ""),
+        "is_recurring": entry.get("is_recurring", False),
+        "categorization_confidence": entry.get("confidence", 0.75),
+        "is_cogs": accounting_type == "cogs",
+        "is_asset_purchase": accounting_type in {"asset_purchase", "debt_payment", "receivable"},
+    }
+
 
 def run_categorizer_agent(parser_output: ParserOutput) -> CategorizerOutput:
     """
-    Menjalankan Categorizer Agent (Bookkeeper) untuk mengklasifikasi transaksi.
+    Klasifikasi transaksi ParserOutput ke kategori bisnis yang valid.
     """
-    system_prompt = get_categorizer_prompt()
-    
-    # Input ke LLM adalah transaksi dari ParserOutput
-    user_message = parser_output.model_dump_json(include={"transactions"})
-    
-    parsed_json, metadata = call_llm_json(
-        agent_name="bookkeeper",
-        system_prompt=system_prompt,
-        user_message=user_message
-    )
-    
-    transactions = parsed_json.get("transactions", [])
-    categories_found = parsed_json.get("categories_found", [])
-    recurring_count = parsed_json.get("recurring_count", 0)
-    
-    # Calculate totals and normalize fields
-    total_income = 0
-    total_expense = 0
-    
-    for t in transactions:
-        amount = t.get("amount", 0)
-        t_type = t.get("type", "expense")
-        
-        if t_type == "income":
-            total_income += amount
-        else:
-            total_expense += amount
-            
-        # Pastikan is_asset_purchase terisi dari COA atau is_pnl
-        if t.get("is_asset_purchase") is None:
-            t["is_asset_purchase"] = not t.get("is_pnl", True)
+    transactions = [_to_categorized(tx) for tx in parser_output.transactions]
+    total_income = sum(t["amount"] for t in transactions if t["type"] == "income")
+    total_expense = sum(t["amount"] for t in transactions if t["type"] == "expense")
+    categories_found = sorted({t["category"] for t in transactions if t.get("category")})
+    recurring_count = sum(1 for t in transactions if t.get("is_recurring"))
 
-    output = CategorizerOutput(
+    return CategorizerOutput(
         session_id=parser_output.session_id,
         transactions=transactions,
         total_income=total_income,
         total_expense=total_expense,
         categories_found=categories_found,
-        recurring_count=recurring_count
+        recurring_count=recurring_count,
     )
-    
-    return output

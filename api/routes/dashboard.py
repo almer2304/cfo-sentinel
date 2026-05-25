@@ -16,6 +16,11 @@ from core.database_new import (
     get_cash_balance,
     get_spending_by_category_efficient,
 )
+from core.finance_rules import (
+    build_dashboard_brief,
+    estimate_health_score,
+    safe_finance_narrative,
+)
 from datetime import datetime, timezone, timedelta
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
@@ -36,27 +41,30 @@ async def get_dashboard(
     today = now.strftime('%Y-%m-%d')
     month_start = now.strftime('%Y-%m-01')
 
+    monthly_financial = get_financial_summary(user_id, month_start, today)
+
     # Data dari pipeline (sudah dihitung)
     summary_today = get_daily_summary(user_id, today)
 
     # Fallback: hitung live dari DB jika pipeline belum jalan
     if not summary_today:
-        financial = get_financial_summary(user_id, month_start, today)
+        financial = monthly_financial
         cash_balance = get_cash_balance(user_id)
         expense = financial.get("total_expense", 0) or 0
         income  = financial.get("total_income", 0) or 0
         active_days = max(financial.get("active_days", 1) or 1, 1)
         burn_day = expense / active_days
         runway = round(cash_balance / burn_day) if burn_day > 0 else 999
+        fallback_score = estimate_health_score(financial, cash_balance)
 
         summary_today = {
-            "health_score":      0,
+            "health_score":      fallback_score,
             "runway_days":       runway,
             "burn_rate_daily":   burn_day,
             "total_income":      income,
             "total_expense":     expense,
             "net_cashflow":      income - expense,
-            "agent_narrative":   "Belum ada analisis hari ini. Tambah transaksi untuk memulai.",
+            "agent_narrative":   safe_finance_narrative(financial, cash_balance, fallback_score, runway),
             "anomaly_count":     0,
             "has_critical_anomaly": 0,
         }
@@ -64,6 +72,7 @@ async def get_dashboard(
     cash_balance = get_cash_balance(user_id)
     anomalies    = get_unresolved_anomalies(user_id, limit=3)
     health_hist  = get_health_history(user_id, days=7)
+    spending      = get_spending_by_category_efficient(user_id, month_start, today)
 
     # Trend health score
     trend = "STABLE"
@@ -78,6 +87,14 @@ async def get_dashboard(
         "DANGER"  if health_score < 40 else
         "WARNING" if health_score < 65 else
         "SAFE"
+    )
+    brief = build_dashboard_brief(
+        monthly_financial,
+        cash_balance=cash_balance,
+        health_score=health_score,
+        runway_days=summary_today.get("runway_days", 0) or 0,
+        anomalies=anomalies,
+        spending=spending,
     )
 
     return BaseResponse(
@@ -100,7 +117,13 @@ async def get_dashboard(
             "anomaly_count": summary_today.get("anomaly_count", 0),
             "has_critical":  bool(summary_today.get("has_critical_anomaly", 0)),
             "anomalies":     anomalies,
+            "spending":      spending[:6],
             "health_history": health_hist,
+            "brief":         brief,
+            "insights":      brief["insights"],
+            "next_actions":  brief["next_actions"],
+            "data_quality":  brief["data_quality"],
+            "risk_posture":  brief["risk_posture"],
             "last_updated":  summary_today.get("processed_at", ""),
         },
     )

@@ -58,11 +58,63 @@ def run_scenario_agent(
     
     prompt = get_scenario_prompt(prompt_data)
     
-    parsed_json, metadata = call_llm_json(
-        agent_name="scenario",
-        system_prompt=SCENARIO_SYSTEM,
-        user_message=prompt
-    )
+    try:
+        parsed_json, _ = call_llm_json(
+            agent_name="scenario",
+            system_prompt=SCENARIO_SYSTEM,
+            user_message=prompt
+        )
+    except Exception:
+        parsed_json = {}
+
+    if not parsed_json:
+        monthly_income = analyst_output.total_income
+        monthly_expense = analyst_output.total_expense
+        delta = monthly_income * (parameter_change_pct / 100)
+        projected_monthly_net = (monthly_income + delta) - monthly_expense
+        projected_daily_burn = max(analyst_output.burn_rate_daily - (delta / 30), 1)
+        projected_runway = (
+            analyst_output.cash_balance / projected_daily_burn
+            if analyst_output.cash_balance > 0 else 0
+        )
+        projected_runway = max(0, min(projected_runway, 180))
+        cuttable = [
+            {
+                "category": item["category"],
+                "amount": item["total"],
+                "is_cuttable": not item["is_recurring"],
+                "cut_potential_pct": 30 if not item["is_recurring"] else 10,
+                "rationale": "Biaya non-rutin lebih mudah dipotong cepat." if not item["is_recurring"] else "Biaya rutin perlu negosiasi atau pengurangan bertahap.",
+            }
+            for item in expense_breakdown
+        ]
+        total_cuttable = sum(
+            item["amount"] * (item["cut_potential_pct"] / 100)
+            for item in cuttable
+        )
+        parsed_json = {
+            "scenario_type": "revenue_drop" if parameter_change_pct < 0 else "revenue_change",
+            "parameter_name": parameter_name,
+            "parameter_change_pct": parameter_change_pct,
+            "new_runway": {
+                "minimum": projected_runway * 0.8,
+                "expected": projected_runway,
+                "maximum": projected_runway * 1.2,
+                "assumption": "Simulasi deterministik dari perubahan pendapatan dan burn rate saat ini.",
+            },
+            "new_health_score": max(0, min(100, analyst_output.health_score.current + (parameter_change_pct * 0.5))),
+            "breakeven_day": int(projected_runway) if projected_monthly_net < 0 else None,
+            "cuttable_costs": [item for item in cuttable if item["is_cuttable"]],
+            "fixed_costs": [item for item in cuttable if not item["is_cuttable"]],
+            "total_cuttable_amount": total_cuttable,
+            "chain_of_consequences": (
+                f"Jika {parameter_name} berubah {parameter_change_pct:+.0f}%, arus kas bulanan "
+                f"berubah sekitar Rp {delta:,.0f}. Runway diproyeksikan menjadi "
+                f"{projected_runway:.0f} hari."
+            ),
+            "mitigation_steps": "Prioritaskan penagihan kas masuk, kurangi biaya non-rutin, dan negosiasikan biaya tetap terbesar.",
+            "mitigation_impact": f"Potensi penghematan cepat sekitar Rp {total_cuttable:,.0f}.",
+        }
     
     new_runway_data = parsed_json.get("new_runway", {})
     new_runway = ConfidenceRange(

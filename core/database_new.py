@@ -198,8 +198,14 @@ def get_transactions_by_user(
             COALESCE(NULLIF(time_only,''), '00:00:00')                  as time_only,
             type, amount, description,
             COALESCE(NULLIF(category,''), 'Lain-lain')                  as category,
+            COALESCE(NULLIF(sub_category,''), '')                       as sub_category,
             COALESCE(notes, '')                                         as notes,
             COALESCE(accounting_type, 'other')                         as accounting_type,
+            COALESCE(debit_account, '')                                as debit_account,
+            COALESCE(credit_account, '')                               as credit_account,
+            COALESCE(agent_classified, 0)                               as agent_classified,
+            COALESCE(confidence, 0)                                     as confidence,
+            COALESCE(raw_input, '')                                     as raw_input,
             COALESCE(is_corrected, 0)                                  as is_corrected,
             COALESCE(is_deleted, 0)                                    as is_deleted
         FROM transactions
@@ -241,10 +247,25 @@ def get_financial_summary(user_id: int, date_from: str, date_to: str) -> dict:
     cursor.execute("""
         SELECT
             COUNT(*)                                    as total_tx,
-            SUM(CASE WHEN type='income'  THEN amount ELSE 0 END) as total_income,
-            SUM(CASE WHEN type='expense' THEN amount ELSE 0 END) as total_expense,
-            SUM(CASE WHEN type='income'  THEN amount
-                     WHEN type='expense' THEN -amount ELSE 0 END) as net_cashflow,
+            -- Cash movement view. Classified rows use double-entry Kas;
+            -- pending/legacy rows fall back to type.
+            SUM(CASE
+                    WHEN debit_account = 'Kas' THEN amount
+                    WHEN COALESCE(agent_classified, 0) = 0 AND type='income' THEN amount
+                    ELSE 0
+                END) as total_income,
+            SUM(CASE
+                    WHEN credit_account = 'Kas' THEN amount
+                    WHEN COALESCE(agent_classified, 0) = 0 AND type='expense' THEN amount
+                    ELSE 0
+                END) as total_expense,
+            SUM(CASE
+                    WHEN debit_account = 'Kas' THEN amount
+                    WHEN credit_account = 'Kas' THEN -amount
+                    WHEN COALESCE(agent_classified, 0) = 0 AND type='income' THEN amount
+                    WHEN COALESCE(agent_classified, 0) = 0 AND type='expense' THEN -amount
+                    ELSE 0
+                END) as net_cashflow,
             SUM(CASE WHEN accounting_type='operational_expense'
                      THEN amount ELSE 0 END)            as operational_expense,
             SUM(CASE WHEN accounting_type='cogs'
@@ -252,18 +273,31 @@ def get_financial_summary(user_id: int, date_from: str, date_to: str) -> dict:
             SUM(CASE WHEN accounting_type='asset_purchase'
                      THEN amount ELSE 0 END)            as asset_purchase,
             -- Deteksi Laba Rugi Berbasis Jurnal
-            SUM(CASE WHEN (debit_account IN ('Pendapatan Usaha', 'Pendapatan Lain') OR 
-                           credit_account IN ('Pendapatan Usaha', 'Pendapatan Lain'))
+            SUM(CASE WHEN (
+                           accounting_type='revenue' OR
+                           debit_account IN ('Pendapatan Usaha', 'Pendapatan Lain') OR
+                           credit_account IN ('Pendapatan Usaha', 'Pendapatan Lain')
+                          )
                      THEN amount ELSE 0 END) as journal_revenue,
-            SUM(CASE WHEN (debit_account LIKE 'Beban%' OR credit_account LIKE 'Beban%' OR
-                           debit_account = 'HPP (Bahan Baku)' OR credit_account = 'HPP (Bahan Baku)')
+            SUM(CASE WHEN (
+                           accounting_type IN ('operational_expense', 'cogs') OR
+                           debit_account LIKE 'Beban%' OR credit_account LIKE 'Beban%' OR
+                           debit_account = 'HPP (Bahan Baku)' OR credit_account = 'HPP (Bahan Baku)'
+                          )
                      THEN amount ELSE 0 END) as journal_expense,
             (SELECT COUNT(*) FROM transaction_anomalies ta 
              WHERE ta.user_id = transactions.user_id 
                AND date(ta.detected_at) BETWEEN ? AND ? 
                AND ta.is_resolved = 0) as anomaly_count,
             AVG(CASE WHEN type='expense' THEN amount END) as avg_expense_per_tx,
-            COUNT(DISTINCT COALESCE(NULLIF(date_only,''), date)) as active_days
+            COUNT(DISTINCT COALESCE(NULLIF(date_only,''), date)) as active_days,
+            SUM(CASE WHEN COALESCE(agent_classified, 0) = 1 THEN 1 ELSE 0 END) as classified_tx,
+            SUM(CASE
+                    WHEN COALESCE(agent_classified, 0) = 0
+                      OR amount = 0
+                      OR COALESCE(category, '') IN ('', 'Pending')
+                    THEN 1 ELSE 0
+                END) as pending_tx
         FROM transactions
         WHERE user_id = ?
           AND COALESCE(NULLIF(date_only,''), date) >= ?
@@ -311,29 +345,34 @@ def get_cash_balance(user_id: int) -> float:
     """
     Hitung saldo kas riil menggunakan logika Double-Entry:
     Saldo Kas = Total Debit Akun 'Kas' - Total Kredit Akun 'Kas'
+    Data legacy/pending yang belum punya debit/credit fallback ke kolom type.
     """
     from core.database import get_connection
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Hitung semua Debit ke Kas (Uang Masuk)
     cursor.execute("""
-        SELECT SUM(amount) as debit FROM transactions
-        WHERE user_id = ? AND is_deleted = 0
-        AND debit_account = 'Kas'
+        SELECT
+            SUM(CASE
+                    WHEN debit_account = 'Kas' THEN amount
+                    WHEN COALESCE(agent_classified, 0) = 0 AND type = 'income' THEN amount
+                    ELSE 0
+                END) as cash_in,
+            SUM(CASE
+                    WHEN credit_account = 'Kas' THEN amount
+                    WHEN COALESCE(agent_classified, 0) = 0 AND type = 'expense' THEN amount
+                    ELSE 0
+                END) as cash_out
+        FROM transactions
+        WHERE user_id = ?
+          AND (is_deleted IS NULL OR is_deleted = 0)
     """, (user_id,))
-    total_debit = cursor.fetchone()["debit"] or 0
-
-    # Hitung semua Kredit ke Kas (Uang Keluar)
-    cursor.execute("""
-        SELECT SUM(amount) as credit FROM transactions
-        WHERE user_id = ? AND is_deleted = 0
-        AND credit_account = 'Kas'
-    """, (user_id,))
-    total_credit = cursor.fetchone()["credit"] or 0
+    row = cursor.fetchone()
 
     conn.close()
-    return round(float(total_debit - total_credit), 2)
+    cash_in = row["cash_in"] or 0
+    cash_out = row["cash_out"] or 0
+    return round(float(cash_in - cash_out), 2)
 
 def get_transaction_by_code(user_id: int, transaction_code: str) -> dict | None:
     from core.database import get_connection
@@ -355,12 +394,13 @@ def update_transaction(user_id: int, transaction_code: str, data: dict) -> bool:
     # Reset akun jurnal agar Agent Bookkeeper memproses ulang (Integritas Buku Besar)
     cursor.execute("""
         UPDATE transactions
-        SET amount = ?, description = ?, category = ?,
+        SET amount = ?, description = ?, raw_input = ?, category = ?,
             notes = ?, agent_classified = 0,
             debit_account = '', credit_account = ''
         WHERE transaction_code = ? AND user_id = ?
     """, (
         data.get("amount"), data.get("description"),
+        data.get("description"),
         data.get("category"), data.get("notes", ""),
         transaction_code, user_id,
     ))
