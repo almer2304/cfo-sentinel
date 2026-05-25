@@ -69,8 +69,8 @@ async def get_history(
                 AnomalyData(
                     category=a["category"],
                     severity=a["severity"],
-                    current_amount=0,
-                    baseline_amount=0,
+                    current_amount=a.get("current_amount", 0),
+                    baseline_amount=a.get("baseline_amount", 0),
                     deviation_pct=a["deviation_pct"],
                     description=a["description"]
                 ) for a in anoms
