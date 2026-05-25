@@ -101,60 +101,41 @@ def run_anomaly_agent(user_id: int) -> dict:
         user_id, three_months_ago, last_month_end
     )
 
-    # Bulan pertama atau tidak ada data → skip deteksi anomali
-    if not current or not baseline_raw:
+    # Jika data baseline kosong, kita tetap jalankan untuk deteksi 'Kategori Baru'
+    if not current:
         result = {"anomalies": [], "overall_risk": "LOW"}
         duration = int((time.time() - start) * 1000)
-        log_agent_step(
-            session_id=f"anomaly-{user_id}-{today}",
-            agent_name="anomaly",
-            step=3,
-            input_summary=f"Current: {len(current) if current else 0} kategori, Baseline: {len(baseline_raw) if baseline_raw else 0} kategori",
-            reasoning="Skipped: data belum cukup untuk deteksi anomali (bulan pertama atau baseline kosong)",
-            output_summary="[]",
-            duration_ms=duration,
-            status="skipped",
-            user_id=user_id,
-        )
         return result
 
-    # Bangun baseline map: rata-rata per bulan per kategori
+    # Bangun baseline map
     baseline_map = {
-        b["category"]: b["total"] / 3
+        b["category"]: b["total"] / max(3, 1) # Support min 1 month baseline
         for b in baseline_raw
-    }
+    } if baseline_raw else {}
 
-    # Siapkan data perbandingan per kategori untuk LLM
+    # Siapkan data perbandingan
     comparison_lines = []
     for c in current[:15]:
         cat = c["category"]
         cur_amt = c["total"]
         base_amt = baseline_map.get(cat, 0)
+        
         if base_amt > 0:
             dev = ((cur_amt - base_amt) / base_amt) * 100
+            label = f"deviasi {dev:+.1f}%"
         else:
-            dev = 100.0 if cur_amt > 0 else 0.0
-        comparison_lines.append(
-            f"• {cat}: bulan ini Rp {cur_amt:,.0f} vs baseline Rp {base_amt:,.0f}/bulan "
-            f"(deviasi {dev:+.1f}%)"
-        )
-
-    # Cek kategori baseline yang hilang di bulan ini (penurunan 100%)
-    current_cats = {c["category"] for c in current}
-    for cat, base_amt in list(baseline_map.items())[:10]:
-        if cat not in current_cats and base_amt > 50000:
-            comparison_lines.append(
-                f"• {cat}: bulan ini Rp 0 vs baseline Rp {base_amt:,.0f}/bulan "
-                f"(deviasi -100.0%) — KATEGORI HILANG"
-            )
+            dev = 100.0
+            label = "KATEGORI BARU"
+            
+        comparison_lines.append(f"• {cat}: Rp {cur_amt:,.0f} ({label})")
 
     bulan_tahun = now.strftime('%B %Y')
     prompt = (
-        f"Periode analisis: {bulan_tahun}\n\n"
-        f"Perbandingan pengeluaran per kategori:\n"
+        f"Periode: {bulan_tahun}\n"
+        f"Tipe Bisnis: kuliner\n\n"
+        f"Daftar Pengeluaran:\n"
         + "\n".join(comparison_lines)
-        + "\n\nDeteksi anomali berdasarkan perbandingan di atas. "
-        "Hanya laporkan kategori dengan |deviasi| ≥ 25%."
+        + "\n\nTugas: Deteksi anomali. Cari kategori yang tidak relevan dengan tipe bisnis (misal: Netflix di bisnis kuliner) atau pengeluaran baru yang mencurigakan."
     )
 
     result, _ = call_llm_json(

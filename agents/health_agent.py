@@ -78,24 +78,32 @@ def run_health_agent(user_id: int) -> dict:
     today = datetime.now(WIB).strftime('%Y-%m-%d')
     month_start = datetime.now(WIB).strftime('%Y-%m-01')
 
-    summary = get_financial_summary(user_id, month_start, today)
+    # Financial summary for the WHOLE MONTH
+    financial = get_financial_summary(user_id, month_start, today)
+    
+    # Financial summary for TODAY specifically (to update history card correctly)
+    summary_today = get_financial_summary(user_id, today, today)
+    
     cash_balance = get_cash_balance(user_id)
 
-    health_score = compute_health_score(summary, cash_balance)
+    health_score = compute_health_score(financial, cash_balance)
 
-    income   = summary.get("total_income", 0) or 0
-    expense  = summary.get("total_expense", 0) or 0
-    net      = income - expense
-    burn_day = expense / max(summary.get("active_days", 1) or 1, 1)
-    runway   = round(cash_balance / burn_day) if burn_day > 0 else 999
+    income_month  = financial.get("total_income", 0) or 0
+    expense_month = financial.get("total_expense", 0) or 0
+    burn_day      = expense_month / max(financial.get("active_days", 1) or 1, 1)
+    runway        = round(cash_balance / burn_day) if burn_day > 0 else 999
+
+    # Data for the history card (Today's performance)
+    income_today  = summary_today.get("total_income", 0) or 0
+    expense_today = summary_today.get("total_expense", 0) or 0
+    net_today     = income_today - expense_today
 
     data_str = (
         f"Health Score: {health_score}/100 | "
-        f"Pemasukan bulan ini: Rp {income:,.0f} | "
-        f"Pengeluaran bulan ini: Rp {expense:,.0f} | "
-        f"Saldo kas: Rp {cash_balance:,.0f} | "
-        f"Uang habis per hari: Rp {burn_day:,.0f} | "
-        f"Perkiraan bertahan: {runway} hari"
+        f"Pemasukan hari ini: Rp {income_today:,.0f} | "
+        f"Pengeluaran hari ini: Rp {expense_today:,.0f} | "
+        f"Saldo kas saat ini: Rp {cash_balance:,.0f} | "
+        f"Runway: {runway} hari"
     )
 
     narrative, _ = call_llm(
@@ -105,7 +113,7 @@ def run_health_agent(user_id: int) -> dict:
         response_format="text",
     )
 
-    # Simpan ke daily_summaries
+    # Simpan ke daily_summaries (Update dengan data TERBARU harian)
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -129,11 +137,11 @@ def run_health_agent(user_id: int) -> dict:
             agent_narrative     = excluded.agent_narrative,
             processed_at        = datetime('now','localtime')
     """, (
-        user_id, today, income, expense, net,
-        summary.get("operational_expense", 0) or 0,
-        summary.get("cogs", 0) or 0,
-        summary.get("asset_purchase", 0) or 0,
-        summary.get("total_tx", 0) or 0,
+        user_id, today, income_today, expense_today, net_today,
+        summary_today.get("operational_expense", 0) or 0,
+        summary_today.get("cogs", 0) or 0,
+        summary_today.get("asset_purchase", 0) or 0,
+        summary_today.get("total_tx", 0) or 0,
         health_score, runway, burn_day,
         narrative or "",
     ))
