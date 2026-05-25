@@ -258,6 +258,10 @@ def get_financial_summary(user_id: int, date_from: str, date_to: str) -> dict:
             SUM(CASE WHEN (debit_account LIKE 'Beban%' OR credit_account LIKE 'Beban%' OR
                            debit_account = 'HPP (Bahan Baku)' OR credit_account = 'HPP (Bahan Baku)')
                      THEN amount ELSE 0 END) as journal_expense,
+            (SELECT COUNT(*) FROM transaction_anomalies ta 
+             WHERE ta.user_id = transactions.user_id 
+               AND date(ta.detected_at) BETWEEN ? AND ? 
+               AND ta.is_resolved = 0) as anomaly_count,
             AVG(CASE WHEN type='expense' THEN amount END) as avg_expense_per_tx,
             COUNT(DISTINCT COALESCE(NULLIF(date_only,''), date)) as active_days
         FROM transactions
@@ -265,7 +269,7 @@ def get_financial_summary(user_id: int, date_from: str, date_to: str) -> dict:
           AND COALESCE(NULLIF(date_only,''), date) >= ?
           AND COALESCE(NULLIF(date_only,''), date) <= ?
           AND (is_deleted IS NULL OR is_deleted = 0)
-    """, (user_id, date_from, date_to))
+    """, (date_from, date_to, user_id, date_from, date_to))
 
     row = cursor.fetchone()
     conn.close()
