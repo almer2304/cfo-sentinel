@@ -115,6 +115,8 @@ class HistoryItem(BaseModel):
     cash_balance: float
     runway_days: float
     narrative: str
+    anomalies: list[AnomalyData] = []
+    action_items: list[ActionItemData] = []
 
 class ChatResponse(BaseModel):
     success: bool

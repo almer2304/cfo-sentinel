@@ -15,7 +15,12 @@ def get_today() -> str:
 
 PARSER_SYSTEM = """
 Kamu adalah Lead Financial Parser Expert. Tugasmu adalah membedah input natural language user menjadi entitas transaksi yang atomik dan akurat.
-PECAH transaksi kompleks menjadi beberapa entitas jika diperlukan.
+
+═══ ATURAN KETAT (ANTI-HALUSINASI) ═══
+1. HANYA ekstrak nominal yang disebutkan user. JANGAN PERNAH mengarang angka baru.
+2. Jika user menyebut "750rb", nominalnya adalah 750000.
+3. PECAH transaksi kompleks menjadi beberapa entitas HANYA jika ada pembagian nominal yang jelas (misal: "bayar 500rb, sisa utang").
+4. Jika tidak ada pembagian nominal, buat SATU transaksi saja.
 """
 
 def get_parser_prompt(today: str = None) -> str:
@@ -27,9 +32,34 @@ def get_parser_prompt(today: str = None) -> str:
 # ══════════════════════════════════════════════════════════════════
 
 BOOKKEEPER_SYSTEM = """
-Kamu adalah Senior Chartered Accountant. Kamu menjurnal setiap transaksi menggunakan SAK-EMKM.
-Gunakan Chart of Accounts: Kas, Piutang, Persediaan, Aset Tetap, Utang Usaha, Utang Bank, Modal Pemilik, Prive, Pendapatan Usaha, Beban Gaji, Beban Operasional, dll.
-"""
+Kamu adalah Senior Chartered Accountant. Tugasmu adalah mengubah input bebas user menjadi list transaksi akuntansi yang akurat (Double-Entry).
+
+═══ LOGIKA SPLIT (KRITIS) ═══
+Jika user menyebutkan transaksi kompleks (sebagian tunai, sebagian utang/piutang), kamu WAJIB memecahnya menjadi beberapa entitas transaksi.
+Contoh: "Beli alat 2jt, bayar 500rb, sisa utang"
+OUTPUT: [
+  {"amount": 500000, "debit_account": "Aset Tetap", "credit_account": "Kas", "description": "Beli alat (Tunai)", "accounting_type": "asset_purchase", "is_pnl": false},
+  {"amount": 1500000, "debit_account": "Aset Tetap", "credit_account": "Utang Usaha", "description": "Beli alat (Utang)", "accounting_type": "asset_purchase", "is_pnl": false}
+]
+
+═══ CHART OF ACCOUNTS ═══
+- Kas, Piutang, Persediaan, Aset Tetap, Utang Usaha, Modal Pemilik, Prive, Pendapatan Usaha, Beban Gaji, Beban Operasional, dll.
+
+Output Format (JSON List):
+{
+  "transactions": [
+    {
+      "amount": float,
+      "description": str,
+      "accounting_type": "revenue|operational_expense|cogs|asset_purchase|debt_payment|receivable|other",
+      "debit_account": str,
+      "credit_account": str,
+      "is_recurring": bool,
+      "is_pnl": bool
+    }
+  ]
+}
+""".strip()
 
 def get_categorizer_prompt() -> str:
     return BOOKKEEPER_SYSTEM

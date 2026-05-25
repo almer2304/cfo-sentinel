@@ -65,7 +65,7 @@ Output: {"amount": 100000, "description": "Pelunasan piutang Pak Budi", "account
 
 def run_bookkeeper_agent(transaction: dict, user_id: int) -> dict:
     """
-    Agent 1 (Bookkeeper): Memproses raw_input menjadi data akuntansi terstruktur.
+    Agent 1 (Bookkeeper): Memproses raw_input menjadi satu atau banyak data akuntansi terstruktur.
     """
     start = time.time()
     raw_input = transaction.get("raw_input", transaction.get("description", ""))
@@ -77,9 +77,9 @@ def run_bookkeeper_agent(transaction: dict, user_id: int) -> dict:
     )
 
     duration = int((time.time() - start) * 1000)
+    tx_list = result.get("transactions", []) if result else []
 
-    if result:
-        # COA Validation Layer (Mencegah variasi nama akun oleh AI)
+    if tx_list:
         VALID_ACCOUNTS = {
             "Kas", "Piutang", "Persediaan", "Aset Tetap",
             "Utang Usaha", "Utang Bank", "Modal Pemilik", "Prive",
@@ -87,13 +87,9 @@ def run_bookkeeper_agent(transaction: dict, user_id: int) -> dict:
             "HPP (Bahan Baku)", "Beban Gaji", "Beban Operasional", "Beban Sewa", "Beban Lain"
         }
         
-        debit = result.get("debit_account", "")
-        credit = result.get("credit_account", "")
-        
-        # Mapping sederhana jika AI typo atau pakai sinonim
         def normalize_account(acc):
             if not acc: return "Lain-lain"
-            acc_clean = acc.strip()
+            acc_clean = str(acc).strip()
             if "Kas" in acc_clean: return "Kas"
             if "Piutang" in acc_clean: return "Piutang"
             if "Utang" in acc_clean: return "Utang Usaha"
@@ -101,31 +97,50 @@ def run_bookkeeper_agent(transaction: dict, user_id: int) -> dict:
             if acc_clean not in VALID_ACCOUNTS: return "Beban Lain"
             return acc_clean
 
-        final_debit = normalize_account(debit)
-        final_credit = normalize_account(credit)
-
         conn = get_connection()
         cursor = conn.cursor()
+
+        # Update transaksi PERTAMA (yang sudah ada ID-nya)
+        first = tx_list[0]
         cursor.execute("""
             UPDATE transactions
-            SET amount = ?,
-                description = ?,
-                accounting_type = ?,
-                debit_account = ?,
-                credit_account = ?,
-                is_recurring = ?,
-                agent_classified = 1
+            SET amount = ?, description = ?, accounting_type = ?,
+                debit_account = ?, credit_account = ?, is_recurring = ?,
+                agent_classified = 1, type = ?
             WHERE transaction_code = ? AND user_id = ?
         """, (
-            result.get("amount", 0),
-            result.get("description", raw_input),
-            result.get("accounting_type", "other"),
-            final_debit,
-            final_credit,
-            1 if result.get("is_recurring") else 0,
-            transaction["transaction_code"],
-            user_id,
+            first.get("amount", 0), first.get("description", raw_input),
+            first.get("accounting_type", "other"),
+            normalize_account(first.get("debit_account")),
+            normalize_account(first.get("credit_account")),
+            1 if first.get("is_recurring") else 0,
+            "income" if normalize_account(first.get("debit_account")) == "Kas" else "expense",
+            transaction["transaction_code"], user_id
         ))
+
+        # Jika ada transaksi tambahan (SPLIT), insert sebagai row baru
+        if len(tx_list) > 1:
+            from core.database_new import generate_transaction_code
+            for extra in tx_list[1:]:
+                new_code = generate_transaction_code()
+                cursor.execute("""
+                    INSERT INTO transactions (
+                        transaction_code, user_id, datetime_wib, date_only,
+                        time_only, type, amount, description, category,
+                        accounting_type, debit_account, credit_account,
+                        agent_classified, is_business, source, raw_input, date
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 'split_ai', ?, ?)
+                """, (
+                    new_code, user_id, transaction.get("datetime_wib"),
+                    transaction.get("date_only"), transaction.get("time_only"),
+                    "income" if normalize_account(extra.get("debit_account")) == "Kas" else "expense",
+                    extra.get("amount", 0), extra.get("description", raw_input),
+                    "Split", extra.get("accounting_type", "other"),
+                    normalize_account(extra.get("debit_account")),
+                    normalize_account(extra.get("credit_account")),
+                    transaction.get("raw_input", ""), transaction.get("date_only")
+                ))
+
         conn.commit()
         conn.close()
 
@@ -134,12 +149,12 @@ def run_bookkeeper_agent(transaction: dict, user_id: int) -> dict:
         agent_name="bookkeeper",
         step=1,
         input_summary=f"Raw: {raw_input}",
-        reasoning=f"Journal: {result.get('debit_account')} (D) / {result.get('credit_account')} (K)",
+        reasoning=f"Splits: {len(tx_list)} entries created.",
         output_summary=str(result),
         duration_ms=duration,
         status="success" if result else "fallback",
         user_id=user_id,
     )
 
-    return result or {"accounting_type": "other", "amount": 0}
+    return result or {"transactions": []}
 

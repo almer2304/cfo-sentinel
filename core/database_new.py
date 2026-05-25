@@ -312,24 +312,24 @@ def get_cash_balance(user_id: int) -> float:
     conn = get_connection()
     cursor = conn.cursor()
 
+    # Hitung semua Debit ke Kas (Uang Masuk)
     cursor.execute("""
-        SELECT 
-            SUM(CASE WHEN debit_account = 'Kas' THEN amount ELSE 0 END) as total_debit,
-            SUM(CASE WHEN credit_account = 'Kas' THEN amount ELSE 0 END) as total_credit
-        FROM transactions
-        WHERE user_id = ?
-          AND (is_deleted IS NULL OR is_deleted = 0)
-          AND debit_account != 'PENDING' 
-          AND credit_account != 'PENDING'
+        SELECT SUM(amount) as debit FROM transactions
+        WHERE user_id = ? AND is_deleted = 0
+        AND debit_account = 'Kas'
     """, (user_id,))
+    total_debit = cursor.fetchone()["debit"] or 0
 
-    row = cursor.fetchone()
+    # Hitung semua Kredit ke Kas (Uang Keluar)
+    cursor.execute("""
+        SELECT SUM(amount) as credit FROM transactions
+        WHERE user_id = ? AND is_deleted = 0
+        AND credit_account = 'Kas'
+    """, (user_id,))
+    total_credit = cursor.fetchone()["credit"] or 0
+
     conn.close()
-
-    debit = row["total_debit"] or 0
-    credit = row["total_credit"] or 0
-    # Pembulatan ke 2 desimal untuk mencegah 'Floating Point Sand' (misal: 0.000000001)
-    return round(float(debit - credit), 2)
+    return round(float(total_debit - total_credit), 2)
 
 def get_transaction_by_code(user_id: int, transaction_code: str) -> dict | None:
     from core.database import get_connection
