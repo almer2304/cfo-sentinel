@@ -61,8 +61,18 @@ def run_health_agent(user_id: int) -> dict:
 
     income_month  = financial.get("total_income", 0) or 0
     expense_month = financial.get("total_expense", 0) or 0
-    burn_day      = expense_month / max(financial.get("active_days", 1) or 1, 1)
-    runway        = round(cash_balance / burn_day) if burn_day > 0 else 999
+    net_month     = income_month - expense_month
+    burn_base     = (
+        (financial.get("operational_expense", 0) or 0)
+        + (financial.get("cogs", 0) or 0)
+    ) or expense_month
+    burn_day      = burn_base / max(financial.get("active_days", 1) or 1, 1)
+    if cash_balance <= 0:
+        runway = 0
+    elif burn_day > 0:
+        runway = min(round(cash_balance / burn_day), 180)
+    else:
+        runway = 180 if (financial.get("total_tx", 0) or 0) > 0 else 0
 
     # Data for the history card (Today's performance)
     income_today  = summary_today.get("total_income", 0) or 0
@@ -73,6 +83,9 @@ def run_health_agent(user_id: int) -> dict:
         f"Health Score: {health_score}/100 | "
         f"Pemasukan hari ini: Rp {income_today:,.0f} | "
         f"Pengeluaran hari ini: Rp {expense_today:,.0f} | "
+        f"Arus kas bulan ini: Rp {net_month:+,.0f} | "
+        f"Pendapatan jurnal bulan ini: Rp {financial.get('journal_revenue', 0) or 0:,.0f} | "
+        f"Beban jurnal bulan ini: Rp {financial.get('journal_expense', 0) or 0:,.0f} | "
         f"Saldo kas saat ini: Rp {cash_balance:,.0f} | "
         f"Runway: {runway} hari"
     )
@@ -134,7 +147,7 @@ def run_health_agent(user_id: int) -> dict:
         agent_name="health",
         step=2,
         input_summary=f"user_id={user_id}, period={month_start} to {today}",
-        reasoning=f"Score: {health_score}, Runway: {runway}d, Net: {net:,.0f}",
+        reasoning=f"Score: {health_score}, Runway: {runway}d, Net month: {net_month:,.0f}",
         output_summary=narrative[:100] if narrative else "",
         duration_ms=duration,
         status="success",

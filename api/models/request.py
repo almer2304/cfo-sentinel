@@ -20,4 +20,4 @@ class AnalysisRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    session_id: Optional[str] = None
+    session_key: Optional[str] = None

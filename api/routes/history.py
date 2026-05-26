@@ -55,6 +55,25 @@ async def get_history(
         """, (user_id, date_str))
         anoms = cursor.fetchall()
 
+        # Ambil data tambahan untuk build brief (deterministic actions)
+        from core.finance_rules import build_dashboard_brief, get_spending_by_category_efficient
+        
+        financial = {
+            "total_income": row["total_income"] or 0,
+            "total_expense": row["total_expense"] or 0,
+            "total_tx": 10, # Mock if unknown
+            "classified_tx": 10,
+        }
+        spending = get_spending_by_category_efficient(user_id, date_str, date_str)
+        brief = build_dashboard_brief(
+            financial,
+            cash_balance=current_balance,
+            health_score=hs,
+            runway_days=row["runway_days"] or 0,
+            anomalies=anoms,
+            spending=spending
+        )
+
         result.append(HistoryItem(
             session_id=row["session_id"],
             created_at=row["created_at"],
@@ -77,7 +96,15 @@ async def get_history(
                     suggested_action=a["suggested_action"] or "",
                 ) for a in anoms
             ],
-            action_items=[] # Advisor data for daily is inside narrative
+            action_items=[
+                ActionItemData(
+                    priority=i+1,
+                    title=item["title"],
+                    description=item["description"],
+                    urgency=item["urgency"],
+                    estimated_impact=item.get("expected_impact", "")
+                ) for i, item in enumerate(brief["next_actions"])
+            ]
         ))
 
     conn.close()

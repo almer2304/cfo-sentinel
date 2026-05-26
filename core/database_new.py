@@ -103,6 +103,17 @@ def init_new_tables():
         )
     """)
 
+    # Migrasi daily_summaries
+    daily_cols = [
+        ("scenario_json", "TEXT DEFAULT ''"),
+        ("actions_json", "TEXT DEFAULT ''"),
+    ]
+    for col_name, col_def in daily_cols:
+        try:
+            cursor.execute(f"ALTER TABLE daily_summaries ADD COLUMN {col_name} {col_def}")
+        except Exception:
+            pass
+
     # Index untuk performa
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_tx_user_date

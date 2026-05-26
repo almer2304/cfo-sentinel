@@ -53,8 +53,17 @@ async def get_dashboard(
         expense = financial.get("total_expense", 0) or 0
         income  = financial.get("total_income", 0) or 0
         active_days = max(financial.get("active_days", 1) or 1, 1)
-        burn_day = expense / active_days
-        runway = round(cash_balance / burn_day) if burn_day > 0 else 999
+        burn_base = (
+            (financial.get("operational_expense", 0) or 0)
+            + (financial.get("cogs", 0) or 0)
+        ) or expense
+        burn_day = burn_base / active_days
+        if cash_balance <= 0:
+            runway = 0
+        elif burn_day > 0:
+            runway = min(round(cash_balance / burn_day), 180)
+        else:
+            runway = 180 if (financial.get("total_tx", 0) or 0) > 0 else 0
         fallback_score = estimate_health_score(financial, cash_balance)
 
         summary_today = {
@@ -97,6 +106,26 @@ async def get_dashboard(
         spending=spending,
     )
 
+    # Ambil scenario jika ada
+    import json
+    scenario = {}
+    try:
+        if summary_today.get("scenario_json"):
+            scenario = json.loads(summary_today["scenario_json"])
+    except:
+        pass
+
+    # Ambil actions dari DB jika ada (v2 intelligence)
+    db_actions = []
+    try:
+        if summary_today.get("actions_json"):
+            db_actions = json.loads(summary_today["actions_json"])
+    except:
+        pass
+
+    # Merge atau gunakan db_actions sebagai prioritas
+    final_actions = db_actions if db_actions else brief["next_actions"]
+
     return BaseResponse(
         success=True,
         data={
@@ -114,19 +143,21 @@ async def get_dashboard(
                 "runway_days":     summary_today.get("runway_days", 0),
             },
             "narrative":     summary_today.get("agent_narrative", ""),
-            "anomaly_count": summary_today.get("anomaly_count", 0),
-            "has_critical":  bool(summary_today.get("has_critical_anomaly", 0)),
             "anomalies":     anomalies,
+            "has_critical":  summary_today.get("has_critical_anomaly", 0) == 1,
+            "anomaly_count": summary_today.get("anomaly_count", 0),
             "spending":      spending[:6],
             "health_history": health_hist,
             "brief":         brief,
             "insights":      brief["insights"],
-            "next_actions":  brief["next_actions"],
+            "next_actions":  final_actions,
             "data_quality":  brief["data_quality"],
             "risk_posture":  brief["risk_posture"],
-            "last_updated":  summary_today.get("processed_at", ""),
+            "scenario":      scenario,
+            "last_updated":  summary_today.get("processed_at"),
         },
     )
+
 
 
 @router.get("/spending", response_model=BaseResponse)

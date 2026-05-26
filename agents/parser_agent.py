@@ -6,25 +6,28 @@ Parser boleh memakai LLM, tetapi fallback deterministik wajib tersedia agar
 endpoint analisis tidak mati saat API key/model bermasalah.
 """
 
-from datetime import date
-
-from core.finance_rules import classify_raw_transaction
+from core.finance_rules import classify_raw_transactions, infer_transaction_date
 from core.llm_client import call_llm_json
 from core.prompts import get_parser_prompt
 from core.schemas import ParserOutput
 
 
 def _fallback_parse(session_id: str, raw_input: str, reason: str = "") -> ParserOutput:
-    result = classify_raw_transaction(raw_input)
-    today = date.today().strftime("%Y-%m-%d")
+    result = classify_raw_transactions(raw_input)
     transactions = []
 
     for tx in result.get("transactions", []):
         transactions.append({
-            "date": today,
+            "date": tx.get("date") or infer_transaction_date(raw_input),
             "amount": tx.get("amount", 0),
             "type": tx.get("type", "expense"),
             "description": tx.get("description", raw_input),
+            "accounting_type": tx.get("accounting_type"),
+            "debit_account": tx.get("debit_account"),
+            "credit_account": tx.get("credit_account"),
+            "category": tx.get("category"),
+            "sub_category": tx.get("sub_category"),
+            "is_pnl": tx.get("is_pnl"),
             "is_business": tx.get("is_business", True),
             "confidence": tx.get("confidence", 0.6),
             "needs_clarification": False,

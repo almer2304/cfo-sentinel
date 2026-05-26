@@ -68,15 +68,18 @@ def run_scenario_agent(
         parsed_json = {}
 
     if not parsed_json:
-        monthly_income = analyst_output.total_income
-        monthly_expense = analyst_output.total_expense
+        monthly_income = analyst_output.total_income or analyst_output.journal_revenue
+        monthly_expense = analyst_output.burn_rate_monthly or analyst_output.total_expense
         delta = monthly_income * (parameter_change_pct / 100)
-        projected_monthly_net = (monthly_income + delta) - monthly_expense
-        projected_daily_burn = max(analyst_output.burn_rate_daily - (delta / 30), 1)
-        projected_runway = (
-            analyst_output.cash_balance / projected_daily_burn
-            if analyst_output.cash_balance > 0 else 0
-        )
+        projected_income = max(0, monthly_income + delta)
+        projected_monthly_net = projected_income - monthly_expense
+        projected_daily_cash_burn = max((monthly_expense - projected_income) / 30, 0)
+        if analyst_output.cash_balance <= 0:
+            projected_runway = 0
+        elif projected_daily_cash_burn > 0:
+            projected_runway = analyst_output.cash_balance / projected_daily_cash_burn
+        else:
+            projected_runway = 180
         projected_runway = max(0, min(projected_runway, 180))
         cuttable = [
             {

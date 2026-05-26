@@ -9,6 +9,7 @@ arsitektur kasir digital v2.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import date, timedelta
 import re
 from typing import Any
 
@@ -49,13 +50,34 @@ MONEY_RE = re.compile(
     re.IGNORECASE,
 )
 
+CLAUSE_SPLIT_RE = re.compile(
+    r"\s*(?:[,;\n]|(?:\blalu\b)|(?:\bterus\b)|(?:\bkemudian\b)|(?:\bhabis itu\b))\s*",
+    re.IGNORECASE,
+)
+
+QUANTITY_WORDS = {
+    "porsi", "pcs", "pc", "buah", "kg", "gram", "gr", "liter", "ltr",
+    "botol", "pack", "pak", "dus", "box", "orang", "kali", "unit",
+    "meter", "m2", "hari", "bulan", "tahun",
+}
+
 
 def _norm(text: str) -> str:
     return (text or "").lower().strip()
 
 
 def _has_any(text: str, keywords: list[str] | set[str] | tuple[str, ...]) -> bool:
-    return any(k in text for k in keywords)
+    for keyword in keywords:
+        k = str(keyword).lower().strip()
+        if not k:
+            continue
+        if " " in k:
+            if k in text:
+                return True
+            continue
+        if re.search(rf"\b{re.escape(k)}\b", text):
+            return True
+    return False
 
 
 def _normalize_number(raw_number: str, suffix: str | None) -> float:
@@ -88,6 +110,33 @@ def _normalize_number(raw_number: str, suffix: str | None) -> float:
     return base
 
 
+def _looks_like_non_money(text: str, match: re.Match, value: float) -> bool:
+    """Hindari salah membaca tanggal, tahun, atau kuantitas sebagai nominal."""
+    prefix = match.group("prefix")
+    suffix = match.group("suffix")
+    number = match.group("number") or ""
+    if prefix or suffix or "." in number or "," in number:
+        return False
+
+    start, end = match.span()
+    before = text[start - 1] if start > 0 else ""
+    after = text[end] if end < len(text) else ""
+
+    # ISO/slash date fragments: 2026-05-26, 26/05/2026.
+    if before in "-/" or after in "-/":
+        return True
+
+    # Standalone year.
+    if len(number) == 4 and 1900 <= value <= 2100:
+        return True
+
+    next_word = re.match(r"\s*([a-zA-Z0-9]+)", text[end:].lower())
+    if next_word and next_word.group(1) in QUANTITY_WORDS:
+        return True
+
+    return False
+
+
 def extract_money_mentions(raw_input: str) -> list[MoneyMention]:
     """Extract Indonesian money mentions such as 750rb, Rp 1.500.000, 2 juta."""
     text = raw_input or ""
@@ -103,6 +152,9 @@ def extract_money_mentions(raw_input: str) -> list[MoneyMention]:
         try:
             value = _normalize_number(number, suffix)
         except ValueError:
+            continue
+
+        if _looks_like_non_money(text, match, value):
             continue
 
         # Avoid parsing quantities like "10 porsi" as rupiah.
@@ -127,12 +179,26 @@ PERSONAL_WORDS = {
 }
 BUSINESS_WORDS = {
     "toko", "warung", "usaha", "bisnis", "pelanggan", "supplier", "stok",
-    "bahan", "jual", "jualan", "sewa", "gaji", "karyawan",
+    "bahan", "jual", "jualan", "sewa", "gaji", "karyawan", "qris",
+    "invoice", "vendor", "modal", "owner", "pemilik",
 }
 INCOME_WORDS = {
     "jual", "jualan", "penjualan", "laku", "omset", "omzet", "pendapatan",
     "terima bayaran", "bayaran", "dibayar pelanggan", "pelanggan bayar",
-    "transfer masuk", "masuk dari", "invoice dibayar",
+    "transfer masuk", "masuk dari", "invoice dibayar", "qris masuk",
+    "cash masuk", "tunai masuk",
+}
+OWNER_CAPITAL_WORDS = {
+    "setor modal", "tambahan modal", "modal dari pemilik", "modal owner",
+    "modal usaha", "pemilik setor", "investasi pemilik",
+}
+OWNER_DRAW_WORDS = {
+    "prive", "ambil uang usaha", "ambil kas", "tarik uang usaha",
+    "uang usaha dipakai pribadi",
+}
+LOAN_RECEIPT_WORDS = {
+    "pinjam uang", "dapat pinjaman", "terima pinjaman", "pinjaman bank",
+    "utang bank cair", "kredit bank cair",
 }
 RECEIVABLE_COLLECTION_WORDS = {
     "terima piutang", "terima pembayaran piutang", "pembayaran piutang",
@@ -202,6 +268,57 @@ def _base_entry(
     confidence: float = 0.78,
 ) -> ClassifiedEntry:
     recurring = _has_any(text, RECURRING_WORDS)
+
+    if _has_any(text, OWNER_CAPITAL_WORDS):
+        return ClassifiedEntry(
+            amount=amount,
+            description=description,
+            accounting_type="other",
+            debit_account="Kas",
+            credit_account="Modal Pemilik",
+            type="income",
+            category="Modal Pemilik",
+            sub_category="Setoran modal",
+            is_recurring=False,
+            is_business=is_business,
+            is_pnl=False,
+            confidence=confidence,
+            reasoning="Kas masuk dari setoran modal pemilik, bukan pendapatan usaha.",
+        )
+
+    if _has_any(text, LOAN_RECEIPT_WORDS):
+        return ClassifiedEntry(
+            amount=amount,
+            description=description,
+            accounting_type="other",
+            debit_account="Kas",
+            credit_account="Utang Bank",
+            type="income",
+            category="Pinjaman Diterima",
+            sub_category="Kas dari pinjaman",
+            is_recurring=False,
+            is_business=is_business,
+            is_pnl=False,
+            confidence=confidence,
+            reasoning="Kas masuk dari pinjaman, bukan pendapatan usaha.",
+        )
+
+    if _has_any(text, OWNER_DRAW_WORDS):
+        return ClassifiedEntry(
+            amount=amount,
+            description=description,
+            accounting_type="other",
+            debit_account="Prive",
+            credit_account="Kas",
+            type="expense",
+            category="Prive",
+            sub_category="Pengambilan pemilik",
+            is_recurring=False,
+            is_business=is_business,
+            is_pnl=False,
+            confidence=confidence,
+            reasoning="Kas keluar untuk prive/pengambilan pemilik, bukan beban usaha.",
+        )
 
     if _has_any(text, RECEIVABLE_COLLECTION_WORDS):
         return ClassifiedEntry(
@@ -359,6 +476,101 @@ def classify_raw_transaction(raw_input: str, business_type: str = "general") -> 
         "reasoning": " | ".join(e.reasoning for e in entries if e.reasoning),
         "confidence": min(e.confidence for e in entries),
         "money_mentions": [asdict(m) for m in mentions],
+        "business_type": business_type,
+    }
+
+
+def infer_transaction_date(raw_input: str, base_date: date | None = None) -> str:
+    """Infer tanggal sederhana dari bahasa Indonesia; fallback ke hari ini."""
+    text = _norm(raw_input)
+    base = base_date or date.today()
+
+    iso = re.search(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b", text)
+    if iso:
+        year, month, day = (int(iso.group(1)), int(iso.group(2)), int(iso.group(3)))
+        try:
+            return date(year, month, day).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+
+    slash = re.search(r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](20\d{2}))?\b", text)
+    if slash:
+        day = int(slash.group(1))
+        month = int(slash.group(2))
+        year = int(slash.group(3)) if slash.group(3) else base.year
+        try:
+            return date(year, month, day).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+
+    if "kemarin" in text:
+        return (base - timedelta(days=1)).strftime("%Y-%m-%d")
+    if "lusa" in text:
+        # Transaksi aktual seharusnya tidak diproyeksikan ke masa depan.
+        return base.strftime("%Y-%m-%d")
+    return base.strftime("%Y-%m-%d")
+
+
+def split_transaction_clauses(raw_input: str) -> list[str]:
+    """Pecah input panjang menjadi klausa transaksi tanpa memecah frasa utang parsial."""
+    text = (raw_input or "").strip()
+    if not text:
+        return []
+
+    clauses = [part.strip() for part in CLAUSE_SPLIT_RE.split(text) if part.strip()]
+    if len(clauses) <= 1:
+        return [text]
+
+    # Gabungkan klausa lanjutan yang menjelaskan pembayaran sebagian.
+    merged: list[str] = []
+    for clause in clauses:
+        lower = _norm(clause)
+        if merged and _has_any(lower, DEBT_SPLIT_WORDS | {"sisa"}):
+            merged[-1] = f"{merged[-1]}, {clause}"
+        else:
+            merged.append(clause)
+    return merged
+
+
+def classify_raw_transactions(raw_input: str, business_type: str = "general") -> dict[str, Any]:
+    """
+    Classify a free-form input that may contain multiple transactions.
+    Deterministic fallback for Parser Agent when LLM is unavailable.
+    """
+    clauses = split_transaction_clauses(raw_input)
+    all_entries: list[dict[str, Any]] = []
+    reasoning: list[str] = []
+    mentions: list[dict[str, Any]] = []
+    tx_date_default = infer_transaction_date(raw_input)
+
+    for clause in clauses:
+        if not extract_money_mentions(clause):
+            continue
+        result = classify_raw_transaction(clause, business_type=business_type)
+        clause_date = infer_transaction_date(clause)
+        for entry in result.get("transactions", []):
+            entry = dict(entry)
+            entry["date"] = clause_date or tx_date_default
+            all_entries.append(entry)
+        if result.get("reasoning"):
+            reasoning.append(result["reasoning"])
+        mentions.extend(result.get("money_mentions", []))
+
+    if not all_entries and raw_input:
+        result = classify_raw_transaction(raw_input, business_type=business_type)
+        for entry in result.get("transactions", []):
+            entry = dict(entry)
+            entry["date"] = tx_date_default
+            all_entries.append(entry)
+        if result.get("reasoning"):
+            reasoning.append(result["reasoning"])
+        mentions.extend(result.get("money_mentions", []))
+
+    return {
+        "transactions": all_entries,
+        "reasoning": " | ".join(reasoning) if reasoning else "Tidak ada transaksi valid yang bisa diklasifikasi.",
+        "confidence": min((e.get("confidence", 0.0) for e in all_entries), default=0.0),
+        "money_mentions": mentions,
         "business_type": business_type,
     }
 

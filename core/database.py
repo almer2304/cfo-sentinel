@@ -69,6 +69,19 @@ def init_database():
             is_business     INTEGER DEFAULT 1,  -- 0=personal, 1=business
             confidence      REAL DEFAULT 1.0,   -- confidence score 0.0-1.0
             source          TEXT DEFAULT 'manual',  -- 'manual', 'csv', 'seed'
+            transaction_code TEXT DEFAULT '',
+            datetime_wib    TEXT DEFAULT '',
+            date_only       TEXT DEFAULT '',
+            time_only       TEXT DEFAULT '',
+            accounting_type TEXT DEFAULT 'other',
+            debit_account   TEXT DEFAULT '',
+            credit_account  TEXT DEFAULT '',
+            agent_classified INTEGER DEFAULT 0,
+            raw_input       TEXT DEFAULT '',
+            notes           TEXT DEFAULT '',
+            is_corrected    INTEGER DEFAULT 0,
+            original_code   TEXT DEFAULT '',
+            is_deleted      INTEGER DEFAULT 0,
             session_id      TEXT,
             created_at      TEXT DEFAULT (datetime('now', 'localtime'))
         )
@@ -235,11 +248,46 @@ def init_database():
     conn.commit()
     conn.close()
 
-    # Migrasi: tambah kolom user_id ke semua tabel yang sudah ada
+    # Migrasi: tambah kolom transaksi v2 dan user_id ke tabel yang sudah ada
+    migrate_transactions_v2_columns()
     migrate_add_user_id()
 
     print("[OK] Database initialized successfully")
     print(f"   Location: {DB_PATH}")
+
+
+def migrate_transactions_v2_columns():
+    """
+    Selaraskan tabel transactions lama dengan arsitektur kasir digital v2.
+    Aman dijalankan berulang kali.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    new_cols = [
+        ("transaction_code", "TEXT DEFAULT ''"),
+        ("datetime_wib", "TEXT DEFAULT ''"),
+        ("date_only", "TEXT DEFAULT ''"),
+        ("time_only", "TEXT DEFAULT ''"),
+        ("accounting_type", "TEXT DEFAULT 'other'"),
+        ("debit_account", "TEXT DEFAULT ''"),
+        ("credit_account", "TEXT DEFAULT ''"),
+        ("agent_classified", "INTEGER DEFAULT 0"),
+        ("raw_input", "TEXT DEFAULT ''"),
+        ("notes", "TEXT DEFAULT ''"),
+        ("is_corrected", "INTEGER DEFAULT 0"),
+        ("original_code", "TEXT DEFAULT ''"),
+        ("is_deleted", "INTEGER DEFAULT 0"),
+    ]
+
+    for col_name, col_def in new_cols:
+        try:
+            cursor.execute(f"ALTER TABLE transactions ADD COLUMN {col_name} {col_def}")
+        except Exception:
+            pass
+
+    conn.commit()
+    conn.close()
 
 
 def migrate_add_user_id():
@@ -446,8 +494,9 @@ def save_transactions(transactions: list[dict], session_id: str,
             INSERT INTO transactions
                 (date, amount, type, description, category, sub_category,
                  is_recurring, is_business, confidence, source, session_id,
-                 user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 accounting_type, debit_account, credit_account,
+                 agent_classified, raw_input, date_only, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             tx.get("date"), tx.get("amount"), tx.get("type"),
             tx.get("description"), tx.get("category"),
@@ -455,7 +504,14 @@ def save_transactions(transactions: list[dict], session_id: str,
             1 if tx.get("is_recurring") else 0,
             1 if tx.get("is_business", True) else 0,
             tx.get("confidence", 1.0), tx.get("source", "manual"),
-            session_id, user_id,
+            session_id,
+            tx.get("accounting_type", "other"),
+            tx.get("debit_account", ""),
+            tx.get("credit_account", ""),
+            1 if tx.get("accounting_type") or tx.get("debit_account") or tx.get("credit_account") else 0,
+            tx.get("raw_input") or tx.get("description", ""),
+            tx.get("date"),
+            user_id,
         ))
         saved += 1
 

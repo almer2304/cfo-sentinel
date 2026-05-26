@@ -129,8 +129,17 @@ def _build_context(user_id: int, user: dict, intents: list[str], message: str) -
     net     = income - expense
     tx_count = summary.get("total_tx", 0) or 0
     active_days = max(summary.get("active_days", 1) or 1, 1)
-    burn_day = expense / active_days
-    runway = round(cash_balance / burn_day) if burn_day > 0 else 999
+    burn_base = (
+        (summary.get("operational_expense", 0) or 0)
+        + (summary.get("cogs", 0) or 0)
+    ) or expense
+    burn_day = burn_base / active_days
+    if cash_balance <= 0:
+        runway = 0
+    elif burn_day > 0:
+        runway = min(round(cash_balance / burn_day), 180)
+    else:
+        runway = 180 if tx_count > 0 else 0
 
     income_today = summary_today.get("total_income", 0) or 0
     expense_today = summary_today.get("total_expense", 0) or 0

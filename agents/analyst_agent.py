@@ -33,6 +33,56 @@ def _safe_get(obj, key, default=None):
     return default
 
 
+def _has_journal_accounts(tx) -> bool:
+    return bool(_safe_get(tx, "debit_account") or _safe_get(tx, "credit_account"))
+
+
+def _cash_in_amount(tx) -> float:
+    amount = _safe_get(tx, "amount", 0) or 0
+    if _safe_get(tx, "debit_account") == "Kas":
+        return amount
+    if not _has_journal_accounts(tx) and _safe_get(tx, "type") == "income":
+        return amount
+    return 0
+
+
+def _cash_out_amount(tx) -> float:
+    amount = _safe_get(tx, "amount", 0) or 0
+    if _safe_get(tx, "credit_account") == "Kas":
+        return amount
+    if not _has_journal_accounts(tx) and _safe_get(tx, "type") == "expense":
+        return amount
+    return 0
+
+
+def _is_journal_revenue(tx) -> bool:
+    return (
+        _safe_get(tx, "accounting_type") == "revenue"
+        or _safe_get(tx, "credit_account") in {"Pendapatan Usaha", "Pendapatan Lain"}
+    )
+
+
+def _is_journal_expense(tx) -> bool:
+    debit = _safe_get(tx, "debit_account", "") or ""
+    return (
+        _safe_get(tx, "accounting_type") in {"operational_expense", "cogs"}
+        or debit.startswith("Beban")
+        or debit == "HPP (Bahan Baku)"
+    )
+
+
+def _is_operating_cash_out(tx) -> bool:
+    if _cash_out_amount(tx) <= 0:
+        return False
+    if _is_journal_expense(tx):
+        return True
+    return not _has_journal_accounts(tx) and _safe_get(tx, "type") == "expense"
+
+
+def _tx_date(tx) -> str:
+    return _safe_get(tx, "date_only") or _safe_get(tx, "date", "")
+
+
 def _compute_health_score(
     net_margin:       float,
     runway_days:        float,
@@ -72,12 +122,12 @@ def _compute_revenue_consistency(transactions) -> float:
     """
     income_txs = [
         t for t in transactions
-        if _safe_get(t, "type") == "income"
+        if _is_journal_revenue(t)
     ]
     if not income_txs:
         return 0.0
 
-    dates_with_income = len(set(_safe_get(t, "date", "") for t in income_txs))
+    dates_with_income = len(set(_tx_date(t) for t in income_txs if _tx_date(t)))
     # Asumsikan rentang penilaian adalah 30 hari
     return min(1.0, dates_with_income / 30.0)
 
@@ -89,8 +139,19 @@ def run_analyst_agent(
     user_id: int = None,
 ) -> AnalystOutput:
 
-    total_income  = categorizer_output.total_income
-    total_expense = categorizer_output.total_expense
+    total_income  = sum(_cash_in_amount(t) for t in categorizer_output.transactions)
+    total_expense = sum(_cash_out_amount(t) for t in categorizer_output.transactions)
+    journal_revenue = sum(
+        _safe_get(t, "amount", 0) or 0
+        for t in categorizer_output.transactions
+        if _is_journal_revenue(t)
+    )
+    journal_expense = sum(
+        _safe_get(t, "amount", 0) or 0
+        for t in categorizer_output.transactions
+        if _is_journal_expense(t)
+    )
+    operating_profit = journal_revenue - journal_expense
     net_cashflow  = total_income - total_expense
 
     today          = datetime.now()
@@ -108,40 +169,24 @@ def run_analyst_agent(
     else:
         monthly_txs = categorizer_output.transactions
 
-    monthly_expense = sum(_safe_get(t, "amount", 0) for t in monthly_txs if _safe_get(t, "type") == "expense")
+    monthly_operating_cash_out = sum(
+        _cash_out_amount(t) for t in monthly_txs if _is_operating_cash_out(t)
+    )
     
-    tx_dates = set(_safe_get(t, "date", "") for t in monthly_txs if _safe_get(t, "type") == "expense")
+    tx_dates = set(
+        _tx_date(t) for t in monthly_txs
+        if _is_operating_cash_out(t) and _tx_date(t)
+    )
     active_days = max(len(tx_dates), 1)
 
-    # ── Pisahkan transaksi berdasarkan jenis akuntansi SAK-ETAP ──
-    # Asset purchase categories (not actual expenses that reduce profit)
-    _ASSET_CATEGORIES = {
-        "Pembelian Persediaan", "Pembelian Aset Tetap",
-        "Pembayaran Utang", "Bahan Baku", "Investasi",
-    }
-
-    actual_beban = sum(
-        _safe_get(t, "amount", 0)
+    non_pnl_cash_out = sum(
+        _cash_out_amount(t)
         for t in categorizer_output.transactions
-        if _safe_get(t, "type") == "expense"
-        and not getattr(t, 'is_asset_purchase', False)
-        and _safe_get(t, "category", "") not in _ASSET_CATEGORIES
-        and _safe_get(t, "is_business", True)
-    )
-
-    pembelian_persediaan = sum(
-        _safe_get(t, "amount", 0)
-        for t in categorizer_output.transactions
-        if _safe_get(t, "type") == "expense"
-        and (
-            getattr(t, 'is_asset_purchase', False)
-            or _safe_get(t, "category", "") in _ASSET_CATEGORIES
-        )
-        and _safe_get(t, "is_business", True)
+        if _cash_out_amount(t) > 0 and not _is_journal_expense(t)
     )
 
     # ── Metrik dasar ─────────────────────────────────────────────
-    burn_rate_daily   = monthly_expense / active_days
+    burn_rate_daily   = monthly_operating_cash_out / active_days
     burn_rate_monthly = burn_rate_daily * 30
 
     # Saldo: saldo awal + net cashflow periode ini
@@ -167,10 +212,9 @@ def run_analyst_agent(
     min_runway = max(0, expected_runway * 0.8)
     max_runway = expected_runway * 1.2
 
-    # Net margin: gunakan actual_beban (bukan total_expense)
-    # agar pembelian persediaan tidak menurunkan margin
-    if total_income > 0:
-        net_margin = max(0, ((total_income - actual_beban) / total_income) * 100)
+    # Net margin memakai jurnal laba-rugi, bukan arus kas.
+    if journal_revenue > 0:
+        net_margin = ((journal_revenue - journal_expense) / journal_revenue) * 100
     else:
         net_margin = 0
 
@@ -209,11 +253,11 @@ def run_analyst_agent(
     running_balance = cash_balance
 
     for i in range(1, 31):
-        running_balance -= burn_rate_daily
+        running_balance -= adjusted_burn_rate
         f_date = (today + timedelta(days=i)).strftime("%Y-%m-%d")
 
         # Cap di 0 untuk display (tidak bisa lebih negatif dari "bangkrut")
-        display_balance = max(running_balance, -burn_rate_daily * 7)
+        display_balance = max(running_balance, -adjusted_burn_rate * 7)
 
         forecast.append(ForecastPoint(
             day=i,
@@ -237,10 +281,12 @@ def run_analyst_agent(
     prompt_data = {
         "period_start":          period_start,
         "period_end":            period_end,
-        "total_income":          total_income,
-        "total_expense":         total_expense,
-        "actual_beban":          actual_beban,
-        "pembelian_persediaan":  pembelian_persediaan,
+        "cash_in":               total_income,
+        "cash_out":              total_expense,
+        "journal_revenue":       journal_revenue,
+        "journal_expense":       journal_expense,
+        "operating_profit":      operating_profit,
+        "non_pnl_cash_out":      non_pnl_cash_out,
         "net_cashflow":          net_cashflow,
         "cash_balance":          cash_balance,
         "burn_rate_daily":       burn_rate_daily,
@@ -258,8 +304,8 @@ def run_analyst_agent(
         {
             "total_income": total_income,
             "total_expense": total_expense,
-            "journal_revenue": total_income,
-            "journal_expense": actual_beban,
+            "journal_revenue": journal_revenue,
+            "journal_expense": journal_expense,
             "total_tx": len(categorizer_output.transactions),
             "active_days": active_days,
         },
@@ -290,6 +336,9 @@ def run_analyst_agent(
         period_end=period_end,
         total_income=total_income,
         total_expense=total_expense,
+        journal_revenue=journal_revenue,
+        journal_expense=journal_expense,
+        operating_profit=operating_profit,
         net_cashflow=net_cashflow,
         cash_balance=cash_balance,
         burn_rate_daily=burn_rate_daily,

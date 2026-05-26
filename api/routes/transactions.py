@@ -45,6 +45,24 @@ class TransactionUpdate(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=500)
 
 
+def _row_cash_in(t: dict) -> float:
+    amount = t.get("amount", 0) or 0
+    if t.get("debit_account") == "Kas":
+        return amount
+    if not t.get("debit_account") and t.get("type") == "income":
+        return amount
+    return 0
+
+
+def _row_cash_out(t: dict) -> float:
+    amount = t.get("amount", 0) or 0
+    if t.get("credit_account") == "Kas":
+        return amount
+    if not t.get("credit_account") and t.get("type") == "expense":
+        return amount
+    return 0
+
+
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
 @router.post("", response_model=BaseResponse)
@@ -103,8 +121,8 @@ async def list_transactions(
     )
     
     # Hitung summary cepat
-    total_income  = sum(t["amount"] for t in txs if t.get("type") == "income")
-    total_expense = sum(t["amount"] for t in txs if t.get("type") == "expense")
+    total_income  = sum(_row_cash_in(t) for t in txs)
+    total_expense = sum(_row_cash_out(t) for t in txs)
     
     return BaseResponse(
         success=True,
@@ -143,8 +161,17 @@ async def get_transactions_dashboard(
         expense      = financial.get("total_expense", 0) or 0
         income       = financial.get("total_income", 0) or 0
         active_days  = max(financial.get("active_days", 1) or 1, 1)
-        burn_day     = expense / active_days
-        runway       = round(cash_balance / burn_day) if burn_day > 0 else 999
+        burn_base    = (
+            (financial.get("operational_expense", 0) or 0)
+            + (financial.get("cogs", 0) or 0)
+        ) or expense
+        burn_day     = burn_base / active_days
+        if cash_balance <= 0:
+            runway = 0
+        elif burn_day > 0:
+            runway = min(round(cash_balance / burn_day), 180)
+        else:
+            runway = 180 if (financial.get("total_tx", 0) or 0) > 0 else 0
         fallback_score = estimate_health_score(financial, cash_balance)
 
         summary_today = {
@@ -168,8 +195,8 @@ async def get_transactions_dashboard(
     )
     
     # Hitung summary dari transaksi yang ditampilkan
-    total_income  = sum(t["amount"] for t in txs if t.get("type") == "income")
-    total_expense = sum(t["amount"] for t in txs if t.get("type") == "expense")
+    total_income  = sum(_row_cash_in(t) for t in txs)
+    total_expense = sum(_row_cash_out(t) for t in txs)
 
     return BaseResponse(
         success=True,

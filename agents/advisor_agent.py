@@ -279,6 +279,38 @@ def run_advisor_agent(
 
     action_items.sort(key=lambda x: x.priority)
 
+    if not action_items:
+        runway = analyst_output.runway_days.expected
+        urgency = (
+            "IMMEDIATE"
+            if runway < 14 or anomaly_output.overall_risk_level in ("HIGH", "CRITICAL")
+            else "THIS_WEEK"
+        )
+        action_items = [
+            ActionItem(
+                priority=1,
+                title="Amankan saldo kas",
+                description=(
+                    "Tunda pengeluaran yang tidak langsung menjaga operasional "
+                    "atau menghasilkan kas masuk sampai runway membaik."
+                ),
+                urgency=urgency,
+                estimated_impact="Menahan kenaikan burn rate harian.",
+                category="cashflow",
+            ),
+            ActionItem(
+                priority=2,
+                title="Validasi transaksi terbesar",
+                description=(
+                    "Cek bukti transaksi, kategori, dan kebutuhan bisnis untuk "
+                    "pengeluaran terbesar di periode ini."
+                ),
+                urgency="THIS_WEEK",
+                estimated_impact="Mengurangi risiko salah klasifikasi dan pemborosan.",
+                category="cost_control",
+            ),
+        ]
+
     # ── Parse early_warning ────────────────────────────────────────
     early_warning: EarlyWarning | None = None
     has_early_warning = parsed_json.get("has_early_warning", False)

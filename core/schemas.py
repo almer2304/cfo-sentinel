@@ -45,6 +45,12 @@ class ParsedTransaction(BaseModel):
     amount:                  float = Field(..., gt=0)
     type:                    Literal["income", "expense"]
     description:             str   = Field(..., min_length=1)
+    accounting_type:         Optional[str] = None
+    debit_account:           Optional[str] = None
+    credit_account:          Optional[str] = None
+    category:                Optional[str] = None
+    sub_category:            Optional[str] = None
+    is_pnl:                  Optional[bool] = None
     is_business:             bool  = True
     confidence:              float = Field(default=1.0, ge=0.0, le=1.0)
     needs_clarification:     bool  = False
@@ -86,6 +92,9 @@ VALID_CATEGORIES = [
     "Pembelian Aset Tetap",
     "Pembayaran Utang",
     "Penerimaan Piutang",
+    "Modal Pemilik",
+    "Pinjaman Diterima",
+    "Prive",
     # Legacy (untuk backward compatibility)
     "Bahan Baku",
     "Operasional",
@@ -108,6 +117,10 @@ class CategorizedTransaction(BaseModel):
     confidence:                 float = 1.0
     category:                   str
     sub_category:               Optional[str] = None
+    accounting_type:            str = "other"
+    debit_account:              str = ""
+    credit_account:             str = ""
+    is_pnl:                     bool = True
     is_recurring:               bool  = False
     categorization_confidence:  float = Field(default=1.0, ge=0.0, le=1.0)
     is_cogs:                    bool  = Field(default=False,
@@ -127,8 +140,14 @@ class CategorizedTransaction(BaseModel):
 class CategorizerOutput(BaseModel):
     session_id:       str
     transactions:     list[CategorizedTransaction]
+    # total_income/total_expense dipertahankan sebagai cash movement
+    # agar konsisten dengan dashboard UMKM: kas masuk dan kas keluar.
     total_income:     float       = 0
     total_expense:    float       = 0
+    total_cash_in:    float       = 0
+    total_cash_out:   float       = 0
+    journal_revenue:  float       = 0
+    journal_expense:  float       = 0
     categories_found: list[str]   = []
     recurring_count:  int         = 0
 
@@ -210,6 +229,9 @@ class AnalystOutput(BaseModel):
     period_end:             str
     total_income:           float = 0
     total_expense:          float = 0
+    journal_revenue:        float = 0
+    journal_expense:        float = 0
+    operating_profit:       float = 0
     net_cashflow:           float = 0
     cash_balance:           float = 0
     burn_rate_daily:        float = 0
