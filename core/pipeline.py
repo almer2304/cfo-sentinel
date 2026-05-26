@@ -2,11 +2,12 @@
 core/pipeline.py
 Background Pipeline Orchestrator
 Dijalankan di thread terpisah setelah setiap transaksi disimpan.
-Urutan: Classifier (Agent 1) → Health (Agent 2) → Anomaly (Agent 3) → Scenario (Agent 4) → Report (Agent 5)
+Urutan: Classifier (Agent 1) → Health (Agent 2) → Anomaly (Agent 3) → Scenario (Agent 4) → Advisor (Agent 5) → Report (Agent 6)
 """
 
 import threading
 import time as _time
+import json
 from datetime import datetime, timezone, timedelta
 
 WIB = timezone(timedelta(hours=7))
@@ -24,12 +25,48 @@ def _run_pipeline(transaction: dict, user_id: int):
 
     # ── Agent 1: Bookkeeper (Deterministic Rules + LLM) ──────────
     t0 = _time.time()
+    category = "Pending"
+    acc_type = "other"
     try:
-        from agents.bookkeeper_agent import run_bookkeeper_agent
-        result_book = run_bookkeeper_agent(transaction, user_id)
+        from core.llm_client import call_llm_json
+        from core.prompts import get_categorizer_prompt
+        from agents.bookkeeper_agent import run_bookkeeper_agent, _update_first_transaction, _insert_split_transaction
+        from core.database import get_connection
+
+        # Coba pakai LLM dulu untuk klasifikasi yang lebih cerdas
+        tx_list = []
+        try:
+            prompt = get_categorizer_prompt()
+            parsed_json, _ = call_llm_json(
+                agent_name="bookkeeper",
+                system_prompt=prompt,
+                user_message=f"Klasifikasikan transaksi ini: {transaction.get('raw_input')}",
+            )
+            tx_list = parsed_json.get("transactions", [])
+        except Exception as e:
+            print(f"[PIPELINE] LLM Bookkeeper fallback: {e}")
+
+        if tx_list:
+            conn = get_connection()
+            cursor = conn.cursor()
+            try:
+                _update_first_transaction(cursor, transaction, tx_list[0], user_id)
+                for extra in tx_list[1:]:
+                    _insert_split_transaction(cursor, transaction, extra, user_id)
+                conn.commit()
+                category = tx_list[0].get("category")
+                acc_type = tx_list[0].get("accounting_type")
+            finally:
+                conn.close()
+        else:
+            # Deterministic Fallback
+            result_book = run_bookkeeper_agent(transaction, user_id)
+            category = result_book.get("category")
+            acc_type = result_book.get("accounting_type")
+
         print(
             f"[PIPELINE] Agent 1 Bookkeeper OK ({int((_time.time()-t0)*1000)}ms) "
-            f"→ {result_book.get('category')} ({result_book.get('accounting_type')}) [user={user_id}]"
+            f"→ {category} ({acc_type}) [user={user_id}]"
         )
     except Exception as e:
         print(f"[PIPELINE] Agent 1 Bookkeeper ERROR: {e}")
@@ -44,14 +81,14 @@ def _run_pipeline(transaction: dict, user_id: int):
     expense_month = 0
     try:
         from agents.health_agent import run_health_agent
+        from core.database_new import get_financial_summary
+        
         result_health = run_health_agent(user_id)
         health_score = result_health.get("health_score", 0)
         runway = result_health.get("runway_days", 0)
         burn_day = result_health.get("burn_rate_daily", 0)
         cash_balance = result_health.get("cash_balance", 0)
         
-        # Ambil month summary untuk Agent 4
-        from core.database_new import get_financial_summary
         financial = get_financial_summary(user_id, month_start, today)
         income_month = financial.get("total_income", 0) or 0
         expense_month = financial.get("total_expense", 0) or 0
@@ -79,6 +116,7 @@ def _run_pipeline(transaction: dict, user_id: int):
 
     # ── Agent 4: Scenario ───────────────────────────────────────────
     t0 = _time.time()
+    result_scenario = None
     try:
         from agents.scenario_agent import run_scenario_agent
         
@@ -111,14 +149,10 @@ def _run_pipeline(transaction: dict, user_id: int):
         )
         
         # Simpan ke DB
-        import json
-        conn = None
+        from core.database import get_connection
+        conn = get_connection()
+        cursor = conn.cursor()
         try:
-            from core.database import get_connection
-            conn = get_connection()
-            cursor = conn.cursor()
-            
-            # Format data untuk frontend (ResultPage compat)
             scenario_data = {
                 "scenario_type": result_scenario.scenario_type,
                 "new_runway_expected": result_scenario.new_runway.expected,
@@ -127,7 +161,6 @@ def _run_pipeline(transaction: dict, user_id: int):
                 "mitigation_steps": result_scenario.mitigation_steps,
                 "total_cuttable_amount": result_scenario.total_cuttable_amount
             }
-            
             cursor.execute("""
                 UPDATE daily_summaries
                 SET scenario_json = ?
@@ -135,7 +168,7 @@ def _run_pipeline(transaction: dict, user_id: int):
             """, (json.dumps(scenario_data), user_id, today))
             conn.commit()
         finally:
-            if conn: conn.close()
+            conn.close()
             
         print(
             f"[PIPELINE] Agent 4 Scenario OK ({int((_time.time()-t0)*1000)}ms) "
@@ -144,35 +177,25 @@ def _run_pipeline(transaction: dict, user_id: int):
     except Exception as e:
         print(f"[PIPELINE] Agent 4 Scenario ERROR: {e}")
 
-    # ── Agent 6: Report ─────────────────────────────────────────────
+    # ── Agent 5: Advisor & Strategic Actions ────────────────────────
     t0 = _time.time()
     try:
-        from agents.report_agent import run_report_agent
-        narrative = run_report_agent(user_id, today)
-        print(
-            f"[PIPELINE] Agent 6 Report OK ({int((_time.time()-t0)*1000)}ms) "
-            f"→ summary updated [user={user_id}]"
-        )
-    except Exception as e:
-        print(f"[PIPELINE] Agent 6 Report ERROR: {e}")
-
-    print(f"[PIPELINE] All done for user {user_id} at {datetime.now(WIB)}")
-
-
-def trigger_pipeline(transaction: dict, user_id: int):
-    """
-    Trigger pipeline di background thread.
-    Return SEGERA — non-blocking.
-    """
-    t = threading.Thread(
-        target=_run_pipeline,
-        args=(transaction, user_id),
-        daemon=True,
-        name=f"pipeline-{transaction.get('transaction_code', 'unknown')}",
-    )
-    t.start()
-    print(f"[PIPELINE] Background thread started: {t.name}")
-t=health_score),
+        from agents.advisor_agent import run_advisor_agent
+        from core.schemas import AnalystOutput, AnomalyOutput, ConfidenceRange, HealthScoreData, AnomalyData
+        
+        analyst_mock_adv = AnalystOutput(
+            session_id=f"advisor-{user_id}-{today}",
+            period_start=month_start,
+            period_end=today,
+            total_income=income_month,
+            total_expense=expense_month,
+            net_cashflow=income_month - expense_month,
+            cash_balance=cash_balance,
+            burn_rate_daily=burn_day,
+            burn_rate_monthly=expense_month,
+            net_margin=( (income_month - expense_month) / income_month * 100 ) if income_month > 0 else 0,
+            runway_days=ConfidenceRange(minimum=max(0, runway*0.8), expected=runway, maximum=runway*1.2),
+            health_score=HealthScoreData(current=health_score),
             business_type="general",
             narrative="",
             forecast_30d=[],
@@ -180,22 +203,18 @@ t=health_score),
         )
         
         anom_list = result_anom.get("anomalies", [])
-        anomaly_mock = AnomalyOutput(
-            session_id=analyst_mock.session_id,
+        anomaly_mock_adv = AnomalyOutput(
+            session_id=analyst_mock_adv.session_id,
             anomalies=[AnomalyData(**a) for a in anom_list],
             overall_risk_level=result_anom.get("overall_risk", "LOW")
         )
         
-        # run_scenario_agent already returned ScenarioOutput if it didn't fail
-        advisor_res = run_advisor_agent(analyst_mock, anomaly_mock, result_scenario if 'result_scenario' in locals() else None)
+        advisor_res = run_advisor_agent(analyst_mock_adv, anomaly_mock_adv, result_scenario)
         
-        # Simpan actions ke DB
-        conn = None
+        from core.database import get_connection
+        conn = get_connection()
+        cursor = conn.cursor()
         try:
-            from core.database import get_connection
-            conn = get_connection()
-            cursor = conn.cursor()
-            
             actions_list = [
                 {
                     "title": item.title,
@@ -205,7 +224,6 @@ t=health_score),
                 }
                 for item in advisor_res.action_items
             ]
-            
             cursor.execute("""
                 UPDATE daily_summaries
                 SET actions_json = ?
@@ -213,7 +231,7 @@ t=health_score),
             """, (json.dumps(actions_list), user_id, today))
             conn.commit()
         finally:
-            if conn: conn.close()
+            conn.close()
             
         print(
             f"[PIPELINE] Agent 5 Advisor OK ({int((_time.time()-t0)*1000)}ms) "
@@ -226,13 +244,13 @@ t=health_score),
     t0 = _time.time()
     try:
         from agents.report_agent import run_report_agent
-        narrative = run_report_agent(user_id, today)
+        run_report_agent(user_id, today)
         print(
-            f"[PIPELINE] Agent 5 Report OK ({int((_time.time()-t0)*1000)}ms) "
+            f"[PIPELINE] Agent 6 Report OK ({int((_time.time()-t0)*1000)}ms) "
             f"→ summary updated [user={user_id}]"
         )
     except Exception as e:
-        print(f"[PIPELINE] Agent 5 Report ERROR: {e}")
+        print(f"[PIPELINE] Agent 6 Report ERROR: {e}")
 
     print(f"[PIPELINE] All done for user {user_id} at {datetime.now(WIB)}")
 
