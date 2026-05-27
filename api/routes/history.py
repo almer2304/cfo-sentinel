@@ -61,7 +61,7 @@ async def get_history(
             'DAILY-' || date_only as session_id,
             date_only || ' 23:59:59' as created_at,
             health_score, total_income, total_expense, net_cashflow,
-            runway_days, agent_narrative as narrative
+            runway_days, transaction_count, agent_narrative as narrative
         FROM daily_summaries
         WHERE user_id = ?
         ORDER BY date_only DESC
@@ -92,11 +92,12 @@ async def get_history(
         # Ambil data tambahan untuk build brief (deterministic actions)
         from core.finance_rules import build_dashboard_brief, get_spending_by_category_efficient
         
+        tx_count = row["transaction_count"] or 0
         financial = {
             "total_income": row["total_income"] or 0,
             "total_expense": row["total_expense"] or 0,
-            "total_tx": row.get("transaction_count", 10),
-            "classified_tx": row.get("transaction_count", 10),
+            "total_tx": tx_count,
+            "classified_tx": tx_count,
         }
         spending = get_spending_by_category_efficient(user_id, date_str, date_str)
         brief = build_dashboard_brief(
