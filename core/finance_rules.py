@@ -184,9 +184,10 @@ BUSINESS_WORDS = {
 }
 INCOME_WORDS = {
     "jual", "jualan", "penjualan", "laku", "omset", "omzet", "pendapatan",
-    "pemasukan", "masuk", "dapat", "terima bayaran", "bayaran", "dibayar pelanggan",
+    "pemasukan", "masuk", "dapat", "terima", "bayaran", "dibayar",
     "pelanggan bayar", "transfer masuk", "masuk dari", "invoice dibayar",
     "qris masuk", "cash masuk", "tunai masuk", "hasil jualan", "setoran",
+    "untung", "laba", "income", "revenue",
 }
 OWNER_CAPITAL_WORDS = {
     "setor modal", "tambahan modal", "modal dari pemilik", "modal owner",
