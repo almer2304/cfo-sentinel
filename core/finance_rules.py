@@ -236,6 +236,10 @@ def _classify_expense_account(text: str) -> tuple[str, str, str, bool, str]:
     """
     Returns: accounting_type, debit_account, category, is_pnl, sub_category.
     """
+    # Deteksi pengeluaran pribadi/non-bisnis lebih awal
+    if _has_any(text, PERSONAL_WORDS):
+        return "other", "Prive", "Pengeluaran Pribadi", False, "Non-Bisnis"
+
     if _has_any(text, {"stok", "persediaan", "restock", "barang dagangan"}):
         return "asset_purchase", "Persediaan", "Pembelian Persediaan", False, "Persediaan"
 

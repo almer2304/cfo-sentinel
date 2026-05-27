@@ -73,6 +73,34 @@ def run_anomaly_agent(user_id: int) -> dict:
     }
 
     anomalies: list[dict] = []
+
+    # ── 1. Cek pengeluaran pribadi (Prive) secara eksplisit ──────────
+    from core.database import get_connection
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT description, amount, transaction_code
+            FROM transactions
+            WHERE user_id = ? AND date_only = ?
+              AND (is_business = 0 OR debit_account = 'Prive')
+              AND (is_deleted IS NULL OR is_deleted = 0)
+        """, (user_id, today))
+        personal_tx = cursor.fetchall()
+        for ptx in personal_tx:
+            anomalies.append({
+                "category": "Pengeluaran Pribadi",
+                "severity": "HIGH",
+                "current_amount": ptx["amount"],
+                "baseline_amount": 0.0,
+                "deviation_pct": 100.0,
+                "description": f"Ditemukan transaksi non-bisnis: '{ptx['description']}'. Menggunakan kas bisnis untuk keperluan pribadi dapat merusak runway.",
+                "suggested_action": "Gunakan dana pribadi untuk transaksi ini atau segera kembalikan dana ke kas bisnis.",
+            })
+    finally:
+        conn.close()
+
+    # ── 2. Cek deviasi pengeluaran kategori (Existing Logic) ────────
     for row in current:
         category = row["category"]
         current_amount = row["total"] or 0
