@@ -148,12 +148,13 @@ def run_anomaly_agent(user_id: int) -> dict:
         for a in anomalies:
             cursor.execute("""
                 INSERT INTO transaction_anomalies (
-                    user_id, category, severity,
+                    user_id, transaction_code, category, severity,
                     current_amount, baseline_amount, deviation_pct,
                     description, suggested_action
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 user_id,
+                a.get("transaction_code", ""),
                 a["category"],
                 a["severity"],
                 a["current_amount"],

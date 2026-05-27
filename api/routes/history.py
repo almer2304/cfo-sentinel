@@ -15,13 +15,47 @@ async def get_history(
 ):
     """
     Ambil riwayat analisis user. 
-    Menggabungkan data dari daily_summaries (otomatis) dan analytics (manual).
+    Menggabungkan data dari daily_summaries (otomatis) dan backfill jika perlu.
     """
     user_id = current_user["id"]
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Ambil dari daily_summaries (Analisis harian otomatis dari pipeline)
+    # 1. Cek tanggal-tanggal yang punya transaksi tapi BELUM punya summary
+    cursor.execute("""
+        SELECT DISTINCT date_only FROM transactions
+        WHERE user_id = ? AND (is_deleted IS NULL OR is_deleted = 0)
+        AND date_only NOT IN (SELECT date_only FROM daily_summaries WHERE user_id = ?)
+        ORDER BY date_only DESC LIMIT 5
+    """, (user_id, user_id))
+    missing_dates = [r["date_only"] for r in cursor.fetchall()]
+
+    # 2. Backfill minimal (deterministic) untuk tanggal yang hilang
+    if missing_dates:
+        from core.database_new import get_financial_summary
+        from core.finance_rules import estimate_health_score
+        from core.database_new import get_cash_balance
+        
+        cash_balance = get_cash_balance(user_id)
+        
+        for d in missing_dates:
+            summ = get_financial_summary(user_id, d, d)
+            if summ["total_tx"] > 0:
+                hs = estimate_health_score(summ, cash_balance)
+                cursor.execute("""
+                    INSERT OR IGNORE INTO daily_summaries (
+                        user_id, date_only, total_income, total_expense,
+                        net_cashflow, transaction_count, health_score,
+                        agent_narrative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    user_id, d, summ["total_income"] or 0, summ["total_expense"] or 0,
+                    (summ["total_income"] or 0) - (summ["total_expense"] or 0),
+                    summ["total_tx"], hs, "Analisis otomatis tersedia."
+                ))
+        conn.commit()
+
+    # 3. Ambil dari daily_summaries (Analisis harian otomatis dari pipeline)
     cursor.execute("""
         SELECT 
             'DAILY-' || date_only as session_id,
@@ -61,8 +95,8 @@ async def get_history(
         financial = {
             "total_income": row["total_income"] or 0,
             "total_expense": row["total_expense"] or 0,
-            "total_tx": 10, # Mock if unknown
-            "classified_tx": 10,
+            "total_tx": row.get("transaction_count", 10),
+            "classified_tx": row.get("transaction_count", 10),
         }
         spending = get_spending_by_category_efficient(user_id, date_str, date_str)
         brief = build_dashboard_brief(
@@ -82,7 +116,7 @@ async def get_history(
             total_income=row["total_income"] or 0,
             total_expense=row["total_expense"] or 0,
             net_cashflow=row["net_cashflow"] or 0,
-            cash_balance=current_balance, # Fallback to current
+            cash_balance=current_balance, 
             runway_days=row["runway_days"] or 0,
             narrative=row["narrative"] or "",
             anomalies=[
@@ -119,6 +153,36 @@ async def get_stats(
     user_id = current_user["id"]
     conn = get_connection()
     cursor = conn.cursor()
+
+    # Pastikan data tersinkronisasi dulu
+    cursor.execute("""
+        SELECT DISTINCT date_only FROM transactions
+        WHERE user_id = ? AND (is_deleted IS NULL OR is_deleted = 0)
+        AND date_only NOT IN (SELECT date_only FROM daily_summaries WHERE user_id = ?)
+    """, (user_id, user_id))
+    missing = cursor.fetchall()
+    if missing:
+        from core.database_new import get_financial_summary
+        from core.finance_rules import estimate_health_score
+        from core.database_new import get_cash_balance
+        cash_balance = get_cash_balance(user_id)
+        for m in missing:
+            d = m["date_only"]
+            summ = get_financial_summary(user_id, d, d)
+            if summ["total_tx"] > 0:
+                hs = estimate_health_score(summ, cash_balance)
+                cursor.execute("""
+                    INSERT OR IGNORE INTO daily_summaries (
+                        user_id, date_only, total_income, total_expense,
+                        net_cashflow, transaction_count, health_score,
+                        agent_narrative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    user_id, d, summ["total_income"] or 0, summ["total_expense"] or 0,
+                    (summ["total_income"] or 0) - (summ["total_expense"] or 0),
+                    summ["total_tx"], hs, "Analisis otomatis tersedia."
+                ))
+        conn.commit()
 
     cursor.execute("""
         SELECT 

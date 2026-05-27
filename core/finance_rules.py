@@ -175,7 +175,10 @@ def extract_money_mentions(raw_input: str) -> list[MoneyMention]:
 
 PERSONAL_WORDS = {
     "pribadi", "rumah", "keluarga", "anak", "istri", "suami", "jajan",
-    "rokok", "liburan", "main", "netflix", "spotify", "bioskop",
+    "rokok", "liburan", "main", "netflix", "spotify", "bioskop", "nonton",
+    "mixue", "richeese", "mcd", "kfc", "starbucks", "kopi kenangan",
+    "shopee", "tokopedia", "tiktok shop", "pajak stnk", "listrik rumah",
+    "pulsa pribadi", "makan siang", "makan malam", "sarapan",
 }
 BUSINESS_WORDS = {
     "toko", "warung", "usaha", "bisnis", "pelanggan", "supplier", "stok",

@@ -203,24 +203,25 @@ def get_transactions_by_user(
     # Pilih kolom yang tersedia — datetime_wib mungkin kosong di transaksi lama
     query = """
         SELECT
-            COALESCE(NULLIF(transaction_code,''), 'TRX-LEGACY-' || id) as transaction_code,
-            COALESCE(NULLIF(datetime_wib,''), date || ' 00:00:00')      as datetime_wib,
-            COALESCE(NULLIF(date_only,''), date)                        as date_only,
-            COALESCE(NULLIF(time_only,''), '00:00:00')                  as time_only,
-            type, amount, description,
-            COALESCE(NULLIF(category,''), 'Lain-lain')                  as category,
-            COALESCE(NULLIF(sub_category,''), '')                       as sub_category,
-            COALESCE(notes, '')                                         as notes,
-            COALESCE(accounting_type, 'other')                         as accounting_type,
-            COALESCE(debit_account, '')                                as debit_account,
-            COALESCE(credit_account, '')                               as credit_account,
-            COALESCE(agent_classified, 0)                               as agent_classified,
-            COALESCE(confidence, 0)                                     as confidence,
-            COALESCE(raw_input, '')                                     as raw_input,
-            COALESCE(is_corrected, 0)                                  as is_corrected,
-            COALESCE(is_deleted, 0)                                    as is_deleted
-        FROM transactions
-        WHERE user_id = ? AND (is_deleted IS NULL OR is_deleted = 0)
+            t.transaction_code,
+            COALESCE(NULLIF(t.datetime_wib,''), t.date || ' 00:00:00')      as datetime_wib,
+            COALESCE(NULLIF(t.date_only,''), t.date)                        as date_only,
+            COALESCE(NULLIF(t.time_only,''), '00:00:00')                  as time_only,
+            t.type, t.amount, t.description,
+            COALESCE(NULLIF(t.category,''), 'Lain-lain')                  as category,
+            COALESCE(NULLIF(t.sub_category,''), '')                       as sub_category,
+            COALESCE(t.notes, '')                                         as notes,
+            COALESCE(t.accounting_type, 'other')                         as accounting_type,
+            COALESCE(t.debit_account, '')                                as debit_account,
+            COALESCE(t.credit_account, '')                               as credit_account,
+            COALESCE(t.agent_classified, 0)                               as agent_classified,
+            COALESCE(t.is_business, 1)                                    as is_business,
+            COALESCE(t.raw_input, '')                                     as raw_input,
+            (SELECT description FROM transaction_anomalies ta 
+             WHERE ta.transaction_code = t.transaction_code 
+               AND ta.is_resolved = 0 LIMIT 1) as anomaly_reason
+        FROM transactions t
+        WHERE t.user_id = ? AND (t.is_deleted IS NULL OR t.is_deleted = 0)
     """
     params = [user_id]
 
