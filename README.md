@@ -1,30 +1,46 @@
-# CFO Sentinel - Backend (Multi-AI Agent)
+# CFO Sentinel - Backend (Multi-AI Agent Ecosystem)
 
-CFO Sentinel adalah sistem manajemen keuangan cerdas yang dirancang khusus untuk UMKM Indonesia. Menggunakan arsitektur Multi-AI Agent, sistem ini mengubah input bahasa alami menjadi jurnal akuntansi yang presisi dan memberikan saran strategis setingkat CFO (Chief Financial Officer).
+CFO Sentinel adalah sistem manajemen keuangan cerdas yang dirancang khusus untuk UMKM Indonesia. Menggunakan arsitektur Multi-AI Agent, sistem ini bertindak sebagai asisten Direktur Keuangan (CFO) yang secara otomatis memproses transaksi, memantau kesehatan bisnis, dan memberikan rekomendasi strategis.
 
-## 🚀 Fitur Utama
+## 🤖 AI Agent Ecosystem
 
-1.  **AI Bookkeeper (Agent 1):** Klasifikasi transaksi otomatis menggunakan LLM dengan fallback aturan akuntansi deterministik. Mendukung *split transaction* (tunai/utang).
-2.  **Financial Health Scorer (Agent 2):** Menghitung skor kesehatan bisnis berdasarkan likuiditas, margin, dan arus kas.
-3.  **Anomaly Detector (Agent 3):** Mendeteksi penyimpangan pengeluaran secara otomatis terhadap baseline historis.
-4.  **Scenario Simulator (Agent 4):** Simulasi "What-If" (misal: "Bagaimana jika omzet turun 20%?") untuk memitigasi risiko.
-5.  **Strategic Advisor (Agent 5):** Memberikan rekomendasi aksi konkret berdasarkan kondisi kas dan runway.
-6.  **Narrative Reporter (Agent 6):** Menghasilkan laporan narasi harian yang mudah dipahami pemilik bisnis.
+Sistem ini digerakkan oleh **6 Agen AI terspesialisasi** yang bekerja secara kolaboratif dalam sebuah *background pipeline*:
 
-## 🛠️ Tech Stack
+1.  **Agent 1: Bookkeeper Agent**
+    *   **Tugas:** Mengonversi input bahasa alami (misal: "beli bensin 50rb") menjadi jurnal akuntansi debit-kredit berbasis SAK EMKM.
+    *   **Keunggulan:** Mendeteksi kategori, tipe akun (Aset/Beban), dan menangani *split transaction* secara otomatis.
+2.  **Agent 2: Health Agent**
+    *   **Tugas:** Menghitung skor kesehatan bisnis (0-100) dan memproyeksikan **Runway** (sisa hari bertahan) berdasarkan saldo kas saat ini.
+3.  **Agent 3: Anomaly Agent**
+    *   **Tugas:** Mendeteksi kebocoran kas, pengeluaran tidak wajar, atau penggunaan dana bisnis untuk keperluan pribadi (prive).
+4.  **Agent 4: Scenario Agent**
+    *   **Tugas:** Melakukan simulasi risiko "What-If" (misal: simulasi dampak jika omzet turun 20%) secara otomatis untuk kesiapan bisnis.
+5.  **Agent 5: Advisor Agent**
+    *   **Tugas:** Merumuskan **Action Items** (rekomendasi aksi) dengan tingkat urgensi tertentu (Immediate/This Week).
+6.  **Agent 6: Reporter Agent**
+    *   **Tugas:** Menghasilkan narasi laporan harian yang membumi dan mudah dipahami oleh pemilik bisnis.
 
-*   **Framework:** FastAPI (Python)
-*   **Database:** SQLite dengan logika Double-Entry Accounting
-*   **AI Engine:** LangGraph / Gemini API / LangChain
-*   **Validation:** Pydantic Models
+## 🛠️ Tech Stack & Komponen
+*   **Framework:** FastAPI (Python) - Performa tinggi & asinkron.
+*   **Database:** SQLite - Portabel dengan dukungan PRAGMA WAL untuk konkurensi.
+*   **AI Engine:** LangGraph / Gemini API - Orkestrasi agent yang kompleks.
+*   **Deployment:** Docker & Docker Compose - Siap dideploy ke lingkungan server apa pun.
 
-## 📦 Instalasi
+## 🚀 Cara Instalasi & Penggunaan
 
-1. Clone repository
-2. Buat virtual environment: `python -m venv venv`
-3. Install dependencies: `pip install -r requirements.txt`
-4. Setup `.env` (isi API Key Gemini/OpenAI)
-5. Jalankan server: `python api/main.py`
+### Menggunakan Docker (Rekomendasi)
+1. Clone repository ini.
+2. Pastikan file `.env` sudah terisi (terutama API Key LLM).
+3. Jalankan perintah:
+   ```bash
+   docker compose up -d --build
+   ```
+4. API akan berjalan di port `8000`. Akses dokumentasi di `http://localhost:8000/docs`.
 
-## 📊 Struktur Data
-Sistem menggunakan tabel `daily_summaries` untuk menyimpan state harian yang diproses oleh background pipeline setiap kali transaksi baru masuk.
+### Tanpa Docker
+1. Buat virtual environment: `python -m venv venv`
+2. Install dependencies: `pip install -r requirements.txt`
+3. Jalankan server: `python api/main.py`
+
+## 📊 Dokumentasi Teknis
+Seluruh logika agent tersimpan di folder `agents/`, sementara aturan akuntansi deterministik (guardrails) tersimpan di `core/finance_rules.py` untuk memastikan AI tidak melakukan kesalahan perhitungan angka keuangan.
