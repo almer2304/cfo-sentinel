@@ -44,3 +44,6 @@ Sistem ini digerakkan oleh **6 Agen AI terspesialisasi** yang bekerja secara kol
 
 ## 📊 Dokumentasi Teknis
 Seluruh logika agent tersimpan di folder `agents/`, sementara aturan akuntansi deterministik (guardrails) tersimpan di `core/finance_rules.py` untuk memastikan AI tidak melakukan kesalahan perhitungan angka keuangan.
+
+## Repo Frontend dari CFO Sentinel
+   `https://github.com/almer2304/cfo-sentinel-frontend`
