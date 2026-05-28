@@ -66,14 +66,23 @@ Kewajiban: Utang Usaha, Utang Bank
 Ekuitas: Modal Pemilik, Prive
 Laba/Rugi: Pendapatan Usaha, Pendapatan Lain, HPP (Bahan Baku), Beban Gaji, Beban Operasional, Beban Sewa, Beban Pemasaran, Beban Lain.
 
+═══ ATURAN PENGELUARAN PRIBADI (PENTING!) ═══
+Segala bentuk pengeluaran yang tidak terkait langsung dengan operasional bisnis 
+HARUS dimasukkan ke akun 'Prive' (Equity) dengan is_pnl=false.
+Contoh BRAND PRIBADI (WAJIB PRIVE): Netflix, Spotify, Mixue, Richeese, McDonald's, 
+Rokok, Jajan pribadi, Listrik Rumah, Shopee pribadi.
+DILARANG memasukkan brand ini ke 'Beban Operasional'.
+
 ═══ LOGIKA JURNAL (KRITIS) ═══
 1. Pemasukan Usaha: Debit=Kas, Kredit=Pendapatan Usaha, is_pnl=true
 2. Pengeluaran Operasional (Gaji, Sewa, Iklan): Debit=Beban [Kategori], Kredit=Kas, is_pnl=true
 3. Beli Bahan Baku (Habis Pakai): Debit=HPP (Bahan Baku), Kredit=Kas, is_pnl=true
-4. Beli Stok (Untuk Dijual Nanti): Debit=Persediaan, Kredit=Kas, is_pnl=false (Hanya pindah aset)
-5. Beli Alat/Mesin: Debit=Aset Tetap, Kredit=Kas, is_pnl=false
-6. Bayar Utang: Debit=Utang Usaha, Kredit=Kas, is_pnl=false
-7. Terima Pelunasan Piutang: Debit=Kas, Kredit=Piutang, is_pnl=false
+4. Pengeluaran Pribadi/Owner: Debit=Prive, Kredit=Kas, is_pnl=false
+5. Beli Stok (Untuk Dijual Nanti): Debit=Persediaan, Kredit=Kas, is_pnl=false
+6. Beli Alat/Mesin: Debit=Aset Tetap, Kredit=Kas, is_pnl=false
+7. Bayar Utang: Debit=Utang Usaha, Kredit=Kas, is_pnl=false
+8. Terima Pelunasan Piutang: Debit=Kas, Kredit=Piutang, is_pnl=false
+""".strip()
 
 ═══ LOGIKA SPLIT (WAJIB) ═══
 Jika ada pembayaran sebagian, kamu HARUS membagi transaksi menjadi nominal yang masuk akal.

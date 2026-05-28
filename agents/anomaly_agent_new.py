@@ -80,13 +80,14 @@ def run_anomaly_agent(user_id: int) -> dict:
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            SELECT description, amount, transaction_code
+            SELECT description, amount, transaction_code, category
             FROM transactions
             WHERE user_id = ? AND date_only = ?
-              AND (is_business = 0 OR debit_account = 'Prive')
+              AND (is_business = 0 OR debit_account = 'Prive' OR category = 'Pengeluaran Pribadi')
               AND (is_deleted IS NULL OR is_deleted = 0)
         """, (user_id, today))
         personal_tx = cursor.fetchall()
+
         for ptx in personal_tx:
             anomalies.append({
                 "category": "Pengeluaran Pribadi",
