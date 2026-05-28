@@ -1,7 +1,7 @@
 """
 core/prompts.py
 CFO Sentinel — Master Prompt Repository
-Versi 2.1 — Restorasi Total untuk Menghilangkan ImportError
+Versi 2.2 — Final Fix for Syntax Errors (Anti-Fragment)
 """
 
 from datetime import date
@@ -82,7 +82,6 @@ DILARANG memasukkan brand ini ke 'Beban Operasional'.
 6. Beli Alat/Mesin: Debit=Aset Tetap, Kredit=Kas, is_pnl=false
 7. Bayar Utang: Debit=Utang Usaha, Kredit=Kas, is_pnl=false
 8. Terima Pelunasan Piutang: Debit=Kas, Kredit=Piutang, is_pnl=false
-""".strip()
 
 ═══ LOGIKA SPLIT (WAJIB) ═══
 Jika ada pembayaran sebagian, kamu HARUS membagi transaksi menjadi nominal yang masuk akal.
