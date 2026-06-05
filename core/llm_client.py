@@ -59,7 +59,7 @@ AGENT_CONFIG = {
         "max_tokens": 1024,
     },
     "health": {
-        "model": os.getenv("MODEL_CLASSIFIER", "qwen3.6-flash"),  # flash untuk kesehatan harian
+        "model": os.getenv("MODEL_HEALTH", "qwen3.6-plus"),
         "temperature": 0.1,
         "max_tokens": 512,
     },
@@ -140,10 +140,7 @@ def call_llm(
     if response_format == "json":
         request_kwargs["response_format"] = {"type": "json_object"}
 
-    # Disable thinking mode untuk model qwen3 agar tidak makan token berlebihan.
-    # Model qwen3 secara default menyertakan <think>...</think> block sebelum
-    # output aktual — ini membuang token dan membuat JSON rawan terpotong.
-    # extra_body ini dikenali oleh Sumopod/vLLM OpenAI-compatible endpoint.
+    # Extra configs for models
     if "qwen3" in model_name.lower() or "qwen/qwen3" in model_name.lower():
         request_kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
 
@@ -151,7 +148,6 @@ def call_llm(
     for attempt in range(1, MAX_RETRIES + 1):
         metadata["attempt"] = attempt
         try:
-            client = _get_client()
             response = client.chat.completions.create(**request_kwargs)
             content = response.choices[0].message.content or ""
 
@@ -164,9 +160,7 @@ def call_llm(
         except Exception as e:
             last_error = e
             error_msg = str(e)
-            is_rate_limit = "429" in error_msg or "rate" in error_msg.lower()
-            print(f"[LLM-ERROR] [{agent_name}] Attempt {attempt}/{MAX_RETRIES} failed: "
-                  f"{'RATE LIMITED' if is_rate_limit else error_msg}")
+            print(f"[LLM-ERROR] [{agent_name}] Attempt {attempt}/{MAX_RETRIES} failed: {error_msg}")
 
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_DELAY * attempt)
@@ -186,6 +180,11 @@ def call_llm_json(
     override_model: Optional[str] = None,
 ) -> tuple[dict, dict]:
     """Wrapper untuk request yang expect JSON response."""
+    # Aggressive JSON-only enforcement in system prompt
+    json_constraint = "\n\nCRITICAL: You must output ONLY a valid JSON object. No preamble, no explanation, no conversational text. Start your response with '{' and end with '}'."
+    if json_constraint not in system_prompt:
+        system_prompt += json_constraint
+
     raw, metadata = call_llm(
         agent_name=agent_name,
         system_prompt=system_prompt,
@@ -195,49 +194,44 @@ def call_llm_json(
     )
 
     try:
-        cleaned = raw.strip()
-
-        # ── Strip <think>...</think> block dari qwen3 thinking mode ──────────
-        # Model qwen3 kadang tetap mengeluarkan think block meski thinking
-        # dinonaktifkan, atau jika model lain yang dipakai mendukung thinking.
-        # Kita strip ini terlebih dahulu agar JSON parsing tidak terganggu.
+        # ── Aggressive Cleaning ───────────────────────────────────────────
         import re
-        cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL).strip()
+        content = raw.strip()
+        
+        # Remove thinking blocks
+        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+        
+        # Extract the JSON block using a more robust regex that handles nested structures
+        start_idx = content.find('{')
+        end_idx = content.rfind('}' )
+        
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            json_str = content[start_idx:end_idx+1]
+        else:
+            json_str = content
 
-        # Strip markdown code fences
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            # Hapus baris pertama (```json atau ```) dan baris terakhir (```)
-            cleaned = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-        cleaned = cleaned.strip()
-
-        # Jika response bukan JSON murni, cari blok JSON di dalamnya
-        if not cleaned.startswith("{") and not cleaned.startswith("["):
-            # Coba ekstrak JSON dari teks bebas
-            json_match = re.search(r'(\{.*\}|\[.*\])', cleaned, re.DOTALL)
-            if json_match:
-                cleaned = json_match.group(1)
-
-        parsed = json.loads(cleaned)
+        # Strip markdown fences
+        if json_str.startswith("```"):
+            json_str = re.sub(r'^```(?:json)?\n', '', json_str)
+            json_str = re.sub(r'\n```$', '', json_str)
+        
+        parsed = json.loads(json_str)
         return parsed, metadata
 
-    except json.JSONDecodeError as e:
-        # Auto-repair truncated JSON
+    except (json.JSONDecodeError, AttributeError, Exception) as e:
+        # Last ditch attempt: regex for anything between { and }
         try:
-            fixed = cleaned
-            open_braces = fixed.count('{') - fixed.count('}')
-            open_brackets = fixed.count('[') - fixed.count(']')
-            if open_brackets > 0:
-                fixed += ']' * open_brackets
-            if open_braces > 0:
-                fixed += '}' * open_braces
-            parsed = json.loads(fixed)
-            print(f"[{agent_name}] JSON auto-repaired!")
-            return parsed, metadata
-        except json.JSONDecodeError:
-            print(f"[{agent_name}] JSON parse error: {e}")
-            print(f"[{agent_name}] Raw response (first 500 chars): {raw[:500]}")
-            return {}, metadata
+            import re
+            match = re.search(r'(\{.*\})', raw, re.DOTALL)
+            if match:
+                parsed = json.loads(match.group(1))
+                return parsed, metadata
+        except:
+            pass
+            
+        print(f"[{agent_name}] JSON parse error: {e}")
+        print(f"[{agent_name}] Raw response (first 300 chars): {raw[:300]}")
+        return {}, metadata
 
 
 def _get_fallback_response(agent_name: str) -> str:
