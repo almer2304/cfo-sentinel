@@ -69,7 +69,7 @@ def run_anomaly_agent(
     try:
         parsed_json, _ = call_llm_json(
             agent_name="anomaly",
-            system_prompt=ANOMALY_SYSTEM,
+            system_prompt=CFO_SYSTEM,
             user_message=prompt
         )
     except Exception:

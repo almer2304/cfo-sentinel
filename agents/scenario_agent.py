@@ -61,7 +61,7 @@ def run_scenario_agent(
     try:
         parsed_json, _ = call_llm_json(
             agent_name="scenario",
-            system_prompt=SCENARIO_SYSTEM,
+            system_prompt=CFO_SYSTEM,
             user_message=prompt
         )
     except Exception:

@@ -64,7 +64,7 @@ def run_report_agent(user_id: int, date_str: str) -> str:
     try:
         narrative, _ = call_llm(
             agent_name="report",
-            system_prompt=REPORT_SYSTEM,
+            system_prompt=CFO_SYSTEM,
             user_message=f"Buat ringkasan harian berdasarkan data berikut:\n{data_str}",
             response_format="text",
         )

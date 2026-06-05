@@ -14,7 +14,7 @@ Fitur khusus:
 
 from core.llm_client import call_llm_json, call_llm
 from core.prompts import (
-    ADVISOR_SYSTEM,
+    CFO_SYSTEM,
     get_advisor_prompt,
     get_conversational_prompt,
 )
@@ -212,7 +212,7 @@ def run_advisor_agent(
     try:
         parsed_json, _ = call_llm_json(
             agent_name="advisor",
-            system_prompt=ADVISOR_SYSTEM,
+            system_prompt=CFO_SYSTEM,
             user_message=user_prompt,
         )
     except Exception:
